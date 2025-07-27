@@ -1,11 +1,10 @@
-# app.py - Complete Enhanced Lead Analytics System with Built-in Dashboard
+# app.py - Complete Enhanced Lead Analytics System (NO PANDAS)
 
 import os
 import json
 import time
 import requests
 import sqlite3
-import pandas as pd
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 from dataclasses import dataclass
@@ -297,6 +296,7 @@ class EnhancedLeadAnalytics:
     
     def get_enhanced_stats(self, location_id=None, days=30, start_date=None, end_date=None):
         conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
         
         # Build WHERE clause
         where_conditions = []
@@ -337,10 +337,33 @@ class EnhancedLeadAnalytics:
         '''
         
         try:
-            df = pd.read_sql_query(query, conn, params=params)
-            stats = df.iloc[0].to_dict()
-        except:
-            # Return default stats if query fails
+            cursor.execute(query, params)
+            result = cursor.fetchone()
+            
+            if result:
+                stats = {
+                    'total_leads': result[0] or 0,
+                    'avg_response_time': result[1] or 0,
+                    'avg_time_to_connection': result[2] or 0,
+                    'avg_time_to_session': result[3] or 0,
+                    'avg_time_to_purchase': result[4] or 0,
+                    'leads_called': result[5] or 0,
+                    'leads_connected': result[6] or 0,
+                    'leads_to_session': result[7] or 0,
+                    'leads_to_purchase': result[8] or 0,
+                    'connection_rate': result[9] or 0,
+                    'session_rate': result[10] or 0,
+                    'conversion_rate': result[11] or 0
+                }
+            else:
+                stats = {
+                    'total_leads': 0, 'avg_response_time': 0, 'avg_time_to_connection': 0,
+                    'avg_time_to_session': 0, 'avg_time_to_purchase': 0, 'leads_called': 0,
+                    'leads_connected': 0, 'leads_to_session': 0, 'leads_to_purchase': 0,
+                    'connection_rate': 0, 'session_rate': 0, 'conversion_rate': 0
+                }
+        except Exception as e:
+            print(f"Database query error: {e}")
             stats = {
                 'total_leads': 0, 'avg_response_time': 0, 'avg_time_to_connection': 0,
                 'avg_time_to_session': 0, 'avg_time_to_purchase': 0, 'leads_called': 0,
@@ -1041,7 +1064,6 @@ def api_sample_data():
 def api_sync_all():
     """Sync all data from GHL"""
     try:
-        # Get all stored tokens
         conn = sqlite3.connect(analytics.db_path)
         cursor = conn.cursor()
         cursor.execute('SELECT * FROM oauth_tokens')
@@ -1068,11 +1090,9 @@ def api_chat():
         data = request.json
         message = data.get('message', '').lower()
         
-        # Get current stats for context
         stats_data = analytics.get_enhanced_stats()
         stats = stats_data['stats']
         
-        # Simple AI response logic
         if 'best' in message and ('time' in message or 'call' in message):
             response = f"Based on your data, your optimal call times show the highest success rates. Your current connection rate is {stats.get('connection_rate', 0):.1f}%."
         elif 'improve' in message or 'better' in message:
@@ -1120,21 +1140,6 @@ def webhook_handler():
                 analytics.record_lead_event(event)
                 print(f"✅ Recorded lead creation: {contact['id']}")
         
-        elif event_type == 'OutboundMessage' and webhook_data.get('messageType') == 'Call':
-            # Handle call attempts
-            contact_id = webhook_data.get('contactId')
-            location_id = webhook_data.get('locationId')
-            
-            if contact_id and location_id:
-                event = LeadEvent(
-                    contact_id=contact_id,
-                    event_type='call_attempted',
-                    timestamp=datetime.now(),
-                    location_id=location_id
-                )
-                analytics.record_lead_event(event)
-                print(f"📞 Recorded call attempt: {contact_id}")
-        
         return jsonify({'status': 'success'})
         
     except Exception as e:
@@ -1149,14 +1154,7 @@ def health_check():
         'timestamp': datetime.now().isoformat(),
         'base_url': BASE_URL,
         'redirect_uri': REDIRECT_URI,
-        'features': [
-            'enhanced_analytics', 
-            'ai_chat', 
-            'location_filtering', 
-            'call_time_analysis',
-            'sample_data',
-            'real_time_webhooks'
-        ]
+        'features': ['enhanced_analytics', 'ai_chat', 'location_filtering', 'call_time_analysis', 'sample_data', 'real_time_webhooks']
     })
 
 @app.route('/api/stats')
@@ -1170,7 +1168,7 @@ def api_basic_stats():
         'avg_response_time': round(stats.get('avg_response_time', 0)),
         'connection_rate': round(stats.get('connection_rate', 0)),
         'conversion_rate': round(stats.get('conversion_rate', 0)),
-        'daily_leads': [5, 8, 12, 7, 15, 10, 18, 14]  # Sample data
+        'daily_leads': [5, 8, 12, 7, 15, 10, 18, 14]
     })
 
 if __name__ == '__main__':
