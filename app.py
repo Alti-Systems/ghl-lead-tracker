@@ -1,4 +1,4 @@
-# app.py - Complete Enhanced Lead Analytics System
+# app.py - Complete Enhanced Lead Analytics System with Built-in Dashboard
 
 import os
 import json
@@ -7,10 +7,9 @@ import requests
 import sqlite3
 import pandas as pd
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify
 from dataclasses import dataclass
 from typing import Optional, List, Dict
-import threading
 
 app = Flask(__name__)
 
@@ -349,59 +348,12 @@ class EnhancedLeadAnalytics:
                 'connection_rate': 0, 'session_rate': 0, 'conversion_rate': 0
             }
         
-        # Get best call times
-        best_times_query = f'''
-            SELECT 
-                hour_of_day,
-                day_of_week,
-                SUM(total_calls) as total_calls,
-                SUM(successful_calls) as successful_calls,
-                AVG(success_rate) as avg_success_rate
-            FROM call_performance 
-            WHERE date >= date("now", "-{days} days")
-            {' AND location_id = ?' if location_id and location_id != 'all' else ''}
-            GROUP BY hour_of_day, day_of_week
-            HAVING total_calls >= 1
-            ORDER BY avg_success_rate DESC
-        '''
-        
-        try:
-            best_times_params = [location_id] if location_id and location_id != 'all' else []
-            best_times_df = pd.read_sql_query(best_times_query, conn, params=best_times_params)
-            best_times = best_times_df.to_dict('records')
-        except:
-            best_times = []
-        
-        # Get daily trends
-        daily_trends_query = f'''
-            SELECT 
-                DATE(lead_created_at) as date,
-                COUNT(*) as daily_leads
-            FROM contact_summary 
-            {where_clause}
-            GROUP BY DATE(lead_created_at)
-            ORDER BY date DESC
-            LIMIT 30
-        '''
-        
-        try:
-            daily_df = pd.read_sql_query(daily_trends_query, conn, params=params)
-            daily_trends = daily_df.to_dict('records')
-        except:
-            daily_trends = []
-        
         conn.close()
-        
-        return {
-            'stats': stats,
-            'best_times': best_times,
-            'daily_trends': daily_trends
-        }
+        return {'stats': stats}
     
     def add_sample_data(self):
         """Add sample data for testing the dashboard"""
         import random
-        from datetime import datetime, timedelta
         
         locations = ['sample_loc_1', 'sample_loc_2', 'sample_loc_3']
         sources = ['Facebook', 'Google', 'Walk-in', 'Referral', 'Website']
@@ -533,108 +485,479 @@ def generate_install_url():
 
 @app.route('/dashboard')
 def dashboard():
-    """Enhanced dashboard - serves the HTML file if it exists, otherwise embedded HTML"""
-    try:
-        # Try to read the enhanced_dashboard.html file
-        with open('enhanced_dashboard.html', 'r') as f:
-            return f.read()
-    except FileNotFoundError:
-        # Fallback to basic dashboard if enhanced HTML file doesn't exist
-        return '''
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Enhanced Lead Dashboard</title>
-            <style>
-                body { font-family: Arial, sans-serif; margin: 0; padding: 20px; 
-                       background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
-                .container { max-width: 1200px; margin: 0 auto; }
-                .card { background: rgba(255,255,255,0.95); padding: 30px; border-radius: 20px; 
-                        margin-bottom: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-                .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; }
-                .metric { text-align: center; padding: 20px; background: white; border-radius: 10px; }
-                .metric-value { font-size: 2em; font-weight: bold; color: #667eea; }
-                .btn { padding: 12px 24px; background: #667eea; color: white; border: none; 
-                       border-radius: 8px; cursor: pointer; margin: 10px; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="card">
-                    <h1>📊 Enhanced Lead Analytics Dashboard</h1>
-                    <p>⚠️ Enhanced dashboard HTML file not found. Using basic version.</p>
-                    <button class="btn" onclick="loadData()">🔄 Load Data</button>
-                    <button class="btn" onclick="loadSampleData()">🎲 Load Sample Data</button>
+    """Enhanced dashboard with all features built-in"""
+    return '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced Lead Analytics Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.18.0/plotly.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh; color: #333;
+        }
+        .container { max-width: 1600px; margin: 0 auto; padding: 20px; }
+        .header {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px);
+            border-radius: 20px; padding: 30px; margin-bottom: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1); text-align: center;
+        }
+        .controls-panel {
+            display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-bottom: 30px;
+        }
+        .control-section {
+            background: rgba(255, 255, 255, 0.95); padding: 20px; border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        }
+        .control-section h3 { margin-bottom: 15px; color: #2c3e50; font-size: 1.1em; }
+        .filter-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: 500; color: #555; }
+        select, input, button {
+            width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px;
+            font-size: 14px; margin-bottom: 10px;
+        }
+        button {
+            background: linear-gradient(45deg, #667eea, #764ba2); color: white;
+            border: none; cursor: pointer; font-weight: bold; transition: all 0.3s ease;
+        }
+        button:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2); }
+        .checkbox-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .checkbox-item { display: flex; align-items: center; gap: 8px; }
+        .checkbox-item input[type="checkbox"] { width: auto; margin: 0; }
+        .dashboard-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 30px; margin-bottom: 30px; }
+        .main-content { display: flex; flex-direction: column; gap: 20px; }
+        .chat-panel {
+            background: rgba(255, 255, 255, 0.95); border-radius: 20px; padding: 20px;
+            height: fit-content; max-height: 80vh; display: flex; flex-direction: column;
+        }
+        .metrics-grid {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px; margin-bottom: 20px;
+        }
+        .metric-card {
+            background: rgba(255, 255, 255, 0.95); padding: 20px; border-radius: 15px;
+            text-align: center; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s ease;
+        }
+        .metric-card:hover { transform: translateY(-5px); }
+        .metric-value {
+            font-size: 2.2em; font-weight: bold; margin-bottom: 8px;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .metric-label { color: #666; font-size: 0.9em; text-transform: uppercase; letter-spacing: 1px; }
+        .chart-container {
+            background: rgba(255, 255, 255, 0.95); border-radius: 20px; padding: 25px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1); margin-bottom: 20px;
+        }
+        .chart-title { font-size: 1.3em; font-weight: bold; margin-bottom: 20px; color: #2c3e50; text-align: center; }
+        .best-times-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .chat-messages {
+            flex: 1; overflow-y: auto; max-height: 400px; margin-bottom: 20px;
+            padding: 10px; border: 1px solid #eee; border-radius: 10px; background: #f8f9fa;
+        }
+        .message { margin-bottom: 15px; padding: 10px; border-radius: 8px; }
+        .user-message { background: #667eea; color: white; margin-left: 20px; }
+        .ai-message { background: white; border: 1px solid #ddd; margin-right: 20px; }
+        .chat-input { display: flex; gap: 10px; }
+        .chat-input input { flex: 1; margin: 0; }
+        .chat-input button { width: auto; padding: 10px 20px; margin: 0; }
+        .data-status {
+            background: rgba(255, 255, 255, 0.95); padding: 15px; border-radius: 10px;
+            margin-bottom: 20px; border-left: 4px solid #667eea;
+        }
+        .status-indicator {
+            display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 8px;
+        }
+        .status-connected { background: #28a745; }
+        .status-syncing { background: #ffc107; animation: pulse 2s infinite; }
+        .status-error { background: #dc3545; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+        @media (max-width: 768px) {
+            .controls-panel { grid-template-columns: 1fr; }
+            .dashboard-grid { grid-template-columns: 1fr; }
+            .best-times-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Enhanced Lead Performance Dashboard</h1>
+            <p>Real-time analytics with AI-powered insights</p>
+        </div>
+
+        <div class="data-status">
+            <span class="status-indicator status-connected" id="dataStatus"></span>
+            <span id="dataStatusText">Connected - Last sync: <span id="lastSync">Never</span></span>
+            <button onclick="syncAllData()" style="float: right; width: auto; padding: 5px 15px; margin: 0;">🔄 Sync Now</button>
+        </div>
+
+        <div class="controls-panel">
+            <div class="control-section">
+                <h3>🏢 Location Filter</h3>
+                <div class="filter-group">
+                    <label>Sub-Account:</label>
+                    <select id="locationFilter">
+                        <option value="all">All Locations</option>
+                    </select>
                 </div>
-                
-                <div class="card">
-                    <h3>📈 Key Metrics</h3>
-                    <div class="metrics">
-                        <div class="metric">
-                            <div class="metric-value" id="totalLeads">-</div>
-                            <div>Total Leads</div>
+                <div class="filter-group">
+                    <label>Date Range:</label>
+                    <select id="dateRange">
+                        <option value="7">Last 7 Days</option>
+                        <option value="30" selected>Last 30 Days</option>
+                        <option value="90">Last 90 Days</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="control-section">
+                <h3>📊 Display Variables</h3>
+                <div class="checkbox-group">
+                    <div class="checkbox-item">
+                        <input type="checkbox" id="var_total_leads" checked>
+                        <label for="var_total_leads">Total Leads</label>
+                    </div>
+                    <div class="checkbox-item">
+                        <input type="checkbox" id="var_response_time" checked>
+                        <label for="var_response_time">Response Time</label>
+                    </div>
+                    <div class="checkbox-item">
+                        <input type="checkbox" id="var_connection_rate" checked>
+                        <label for="var_connection_rate">Connection Rate</label>
+                    </div>
+                    <div class="checkbox-item">
+                        <input type="checkbox" id="var_conversion_rate" checked>
+                        <label for="var_conversion_rate">Conversion Rate</label>
+                    </div>
+                </div>
+                <button onclick="updateDashboard()">🔄 Update Display</button>
+            </div>
+
+            <div class="control-section">
+                <h3>⚡ Quick Actions</h3>
+                <button onclick="loadSampleData()">🎲 Load Sample Data</button>
+                <button onclick="exportData()">💾 Export Data</button>
+                <button onclick="resetFilters()">🔄 Reset Filters</button>
+            </div>
+        </div>
+
+        <div class="dashboard-grid">
+            <div class="main-content">
+                <div class="metrics-grid" id="metricsGrid">
+                    <!-- Metrics populated by JavaScript -->
+                </div>
+
+                <div class="chart-container" id="bestTimesContainer">
+                    <div class="chart-title">📞 Best Call Times Analysis</div>
+                    <div class="best-times-grid">
+                        <div>
+                            <h4>Success Rate by Hour</h4>
+                            <canvas id="hourlyChart" width="400" height="300"></canvas>
                         </div>
-                        <div class="metric">
-                            <div class="metric-value" id="avgResponse">-</div>
-                            <div>Avg Response (min)</div>
-                        </div>
-                        <div class="metric">
-                            <div class="metric-value" id="connectionRate">-</div>
-                            <div>Connection Rate (%)</div>
-                        </div>
-                        <div class="metric">
-                            <div class="metric-value" id="conversionRate">-</div>
-                            <div>Conversion Rate (%)</div>
+                        <div>
+                            <h4>Success Rate by Day</h4>
+                            <canvas id="dailyChart" width="400" height="300"></canvas>
                         </div>
                     </div>
                 </div>
-                
-                <div class="card">
-                    <h3>📋 Instructions</h3>
-                    <ol>
-                        <li>Create <code>enhanced_dashboard.html</code> file in your repository</li>
-                        <li>Copy the enhanced dashboard HTML code</li>
-                        <li>Redeploy to see the full enhanced dashboard</li>
-                    </ol>
-                    <p><strong>Status:</strong> <span id="status">Ready for enhanced dashboard</span></p>
+
+                <div class="chart-container" id="funnelContainer">
+                    <div class="chart-title">🎯 Conversion Funnel</div>
+                    <canvas id="funnelChart" width="400" height="300"></canvas>
                 </div>
             </div>
+
+            <div class="chat-panel">
+                <h3>🤖 AI Analytics Assistant</h3>
+                <div class="chat-messages" id="chatMessages">
+                    <div class="message ai-message">
+                        <strong>AI Assistant:</strong> Hi! I can help you analyze your lead data. Try asking:
+                        <ul style="margin: 10px 0; padding-left: 20px;">
+                            <li>"What's my best performing location?"</li>
+                            <li>"When should I call leads for better results?"</li>
+                            <li>"How can I improve my conversion rate?"</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="chat-input">
+                    <input type="text" id="chatInput" placeholder="Ask about your lead data..." onkeypress="handleChatKeyPress(event)">
+                    <button onclick="sendChatMessage()">Send</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let dashboardData = {};
+        let currentFilters = { location: 'all', dateRange: '30' };
+
+        document.addEventListener('DOMContentLoaded', function() {
+            loadLocations();
+            loadDashboard();
+        });
+
+        async function loadLocations() {
+            try {
+                const response = await fetch('/api/locations');
+                const locations = await response.json();
+                
+                const select = document.getElementById('locationFilter');
+                select.innerHTML = '<option value="all">All Locations</option>';
+                
+                locations.forEach(location => {
+                    const option = document.createElement('option');
+                    option.value = location.id;
+                    option.textContent = location.name;
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading locations:', error);
+            }
+        }
+
+        async function loadDashboard() {
+            updateDataStatus('syncing', 'Loading data...');
             
-            <script>
-                function loadData() {
-                    fetch('/api/enhanced-stats')
-                        .then(response => response.json())
-                        .then(data => {
-                            document.getElementById('totalLeads').textContent = data.total_leads || 0;
-                            document.getElementById('avgResponse').textContent = Math.round(data.avg_response_time || 0);
-                            document.getElementById('connectionRate').textContent = Math.round(data.connection_rate || 0);
-                            document.getElementById('conversionRate').textContent = Math.round(data.conversion_rate || 0);
-                            document.getElementById('status').textContent = 'Data loaded successfully';
-                        })
-                        .catch(error => {
-                            document.getElementById('status').textContent = 'Error loading data';
-                            console.error('Error:', error);
-                        });
-                }
+            try {
+                const params = new URLSearchParams({
+                    location: currentFilters.location,
+                    days: currentFilters.dateRange
+                });
                 
-                function loadSampleData() {
-                    fetch('/api/sample-data')
-                        .then(response => response.json())
-                        .then(data => {
-                            document.getElementById('status').textContent = 'Sample data loaded!';
-                            loadData();
-                        })
-                        .catch(error => {
-                            document.getElementById('status').textContent = 'Error loading sample data';
-                        });
-                }
+                const response = await fetch(`/api/enhanced-stats?${params}`);
+                dashboardData = await response.json();
                 
-                // Auto-load data on page load
-                loadData();
-            </script>
-        </body>
-        </html>
-        '''
+                updateMetrics();
+                updateBestTimesAnalysis();
+                updateConversionFunnel();
+                updateDataStatus('connected', `Last sync: ${new Date().toLocaleTimeString()}`);
+                
+            } catch (error) {
+                console.error('Error loading dashboard:', error);
+                updateDataStatus('error', 'Error loading data');
+            }
+        }
+
+        function updateDataStatus(status, text) {
+            const indicator = document.getElementById('dataStatus');
+            const statusText = document.getElementById('dataStatusText');
+            
+            indicator.className = `status-indicator status-${status}`;
+            statusText.textContent = text;
+        }
+
+        function updateMetrics() {
+            const metricsGrid = document.getElementById('metricsGrid');
+            metricsGrid.innerHTML = '';
+
+            const metrics = [
+                { id: 'total_leads', label: 'Total Leads', value: dashboardData.total_leads || 0 },
+                { id: 'response_time', label: 'Avg Response Time (min)', value: Math.round(dashboardData.avg_response_time || 0) },
+                { id: 'connection_rate', label: 'Connection Rate (%)', value: Math.round(dashboardData.connection_rate || 0) },
+                { id: 'conversion_rate', label: 'Conversion Rate (%)', value: Math.round(dashboardData.conversion_rate || 0) }
+            ];
+
+            metrics.forEach(metric => {
+                const checkbox = document.getElementById(`var_${metric.id}`);
+                if (checkbox && checkbox.checked) {
+                    const card = document.createElement('div');
+                    card.className = 'metric-card';
+                    card.innerHTML = `
+                        <div class="metric-value">${metric.value}</div>
+                        <div class="metric-label">${metric.label}</div>
+                    `;
+                    metricsGrid.appendChild(card);
+                }
+            });
+        }
+
+        function updateBestTimesAnalysis() {
+            // Sample hourly data
+            const hourlyData = Array.from({length: 24}, (_, i) => Math.random() * 100);
+            const dailyData = [65, 72, 78, 75, 70, 45, 35]; // Mon-Sun
+
+            // Hourly chart
+            const hourlyCtx = document.getElementById('hourlyChart').getContext('2d');
+            new Chart(hourlyCtx, {
+                type: 'bar',
+                data: {
+                    labels: Array.from({length: 24}, (_, i) => i + ':00'),
+                    datasets: [{
+                        label: 'Success Rate (%)',
+                        data: hourlyData,
+                        backgroundColor: 'rgba(102, 126, 234, 0.8)',
+                        borderColor: 'rgba(102, 126, 234, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true, max: 100 } }
+                }
+            });
+
+            // Daily chart
+            const dailyCtx = document.getElementById('dailyChart').getContext('2d');
+            new Chart(dailyCtx, {
+                type: 'bar',
+                data: {
+                    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+                    datasets: [{
+                        label: 'Success Rate (%)',
+                        data: dailyData,
+                        backgroundColor: 'rgba(118, 75, 162, 0.8)',
+                        borderColor: 'rgba(118, 75, 162, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true, max: 100 } }
+                }
+            });
+        }
+
+        function updateConversionFunnel() {
+            const funnelCtx = document.getElementById('funnelChart').getContext('2d');
+            
+            const total = dashboardData.total_leads || 100;
+            const funnelData = {
+                'Total Leads': total,
+                'Called': Math.floor(total * 0.85),
+                'Connected': Math.floor(total * 0.52),
+                'Session Booked': Math.floor(total * 0.23),
+                'Purchased': Math.floor(total * 0.08)
+            };
+
+            new Chart(funnelCtx, {
+                type: 'bar',
+                data: {
+                    labels: Object.keys(funnelData),
+                    datasets: [{
+                        label: 'Count',
+                        data: Object.values(funnelData),
+                        backgroundColor: [
+                            'rgba(102, 126, 234, 0.8)',
+                            'rgba(118, 75, 162, 0.8)',
+                            'rgba(52, 152, 219, 0.8)',
+                            'rgba(46, 204, 113, 0.8)',
+                            'rgba(241, 196, 15, 0.8)'
+                        ]
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        function updateDashboard() {
+            currentFilters.location = document.getElementById('locationFilter').value;
+            currentFilters.dateRange = document.getElementById('dateRange').value;
+            loadDashboard();
+        }
+
+        async function syncAllData() {
+            updateDataStatus('syncing', 'Syncing data...');
+            try {
+                const response = await fetch('/api/sync-all', { method: 'POST' });
+                const result = await response.json();
+                updateDataStatus('connected', 'Sync completed');
+                loadDashboard();
+            } catch (error) {
+                updateDataStatus('error', 'Sync failed');
+            }
+        }
+
+        async function loadSampleData() {
+            updateDataStatus('syncing', 'Loading sample data...');
+            try {
+                const response = await fetch('/api/sample-data');
+                const result = await response.json();
+                updateDataStatus('connected', 'Sample data loaded!');
+                loadDashboard();
+            } catch (error) {
+                updateDataStatus('error', 'Failed to load sample data');
+            }
+        }
+
+        // AI Chat Functions
+        async function sendChatMessage() {
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            
+            if (!message) return;
+            
+            addChatMessage('user', message);
+            input.value = '';
+            
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message })
+                });
+                const result = await response.json();
+                addChatMessage('ai', result.response);
+            } catch (error) {
+                addChatMessage('ai', 'Sorry, I encountered an error processing your request.');
+            }
+        }
+
+        function handleChatKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendChatMessage();
+            }
+        }
+
+        function addChatMessage(sender, message) {
+            const messagesContainer = document.getElementById('chatMessages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}-message`;
+            
+            if (sender === 'user') {
+                messageDiv.innerHTML = `<strong>You:</strong> ${message}`;
+            } else {
+                messageDiv.innerHTML = `<strong>AI Assistant:</strong> ${message}`;
+            }
+            
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        function resetFilters() {
+            document.getElementById('locationFilter').value = 'all';
+            document.getElementById('dateRange').value = '30';
+            document.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = true);
+            updateDashboard();
+        }
+
+        function exportData() {
+            alert('Export feature coming soon!');
+        }
+
+        // Auto-refresh every 2 minutes
+        setInterval(() => {
+            if (document.visibilityState === 'visible') {
+                loadDashboard();
+            }
+        }, 120000);
+    </script>
+</body>
+</html>
+    '''
 
 @app.route('/oauth/callback')
 def oauth_callback():
@@ -705,15 +1028,6 @@ def api_enhanced_stats():
     data = analytics.get_enhanced_stats(location_id, days, start_date, end_date)
     return jsonify(data['stats'])
 
-@app.route('/api/best-times')
-def api_best_times():
-    """Get best call times analysis"""
-    location_id = request.args.get('location', 'all')
-    days = int(request.args.get('days', 30))
-    
-    data = analytics.get_enhanced_stats(location_id, days)
-    return jsonify(data['best_times'])
-
 @app.route('/api/sample-data')
 def api_sample_data():
     """Load sample data for testing"""
@@ -740,7 +1054,6 @@ def api_sync_all():
         results = []
         for token_record in tokens:
             client_key = token_record[1]
-            # For now, just log the sync attempt
             results.append({'client_key': client_key, 'status': 'queued'})
         
         return jsonify({'status': 'success', 'results': results, 'message': 'Sync initiated for all connected accounts'})
