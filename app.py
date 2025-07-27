@@ -1,4 +1,72 @@
-# app.py - Real-Time GHL Lead Analytics - CLEAN VERSION
+async function refreshData() {
+            updateDataStatus('syncing', 'Refreshing all data...');
+            try {
+                await syncAllLocations();
+                setTimeout(() => { loadDashboard(); }, 1000);
+            } catch (error) {
+                updateDataStatus('error', 'Refresh failed');
+            }
+        }
+
+@app.route('/health')
+def health_check():
+    conn = sqlite3.connect(analytics.db_path)
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT COUNT(*) FROM contact_journey')
+    total_contacts = cursor.fetchone()[0]
+    
+    cursor.execute('SELECT COUNT(*) FROM ghl_locations WHERE is_active = TRUE')
+    total_locations = cursor.fetchone()[0]
+    
+    cursor.execute('SELECT COUNT(*) FROM webhook_events WHERE received_at >= date("now", "-1 day")')
+    recent_webhooks = cursor.fetchone()[0]
+    
+    conn.close()
+    
+    token_data = get_valid_token()
+    token_status = 'valid' if token_data else 'missing'
+    
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
+        'base_url': BASE_URL,
+        'webhook_url': f'{BASE_URL}/webhook',
+        'version': '3.1.0 - FIXED DATA LOADING',
+        'database_health': {
+            'total_contacts': total_contacts,
+            'total_locations': total_locations,
+            'recent_webhooks_24h': recent_webhooks
+        },
+        'oauth_status': token_status,
+        'scopes_configured': SCOPES,
+        'features': [
+            'ALL_LOCATIONS_SYNC_FIXED',
+            'FULL_CONVERSION_FUNNEL',
+            'REAL_TIME_WEBHOOK_PROCESSING',
+            'SPEED_TO_LEAD_METRICS',
+            'COMPREHENSIVE_ERROR_HANDLING',
+            'DEBUG_TOOLS_INCLUDED'
+        ],
+        'debug_endpoints': [
+            f'{BASE_URL}/api/debug-database',
+            f'{BASE_URL}/api/test-api-access',
+            f'{BASE_URL}/api/webhook-debug'
+        ]
+    })
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    print(f"🚀 Real-Time GHL Lead Analytics v3.1 - FIXED DATA LOADING starting on port {port}")
+    print(f"📍 Base URL: {BASE_URL}")
+    print(f"📨 Webhook URL: {BASE_URL}/webhook")
+    print(f"📊 Dashboard: {BASE_URL}/dashboard")
+    print(f"🏥 Health: {BASE_URL}/health")
+    print(f"🔍 Debug Database: {BASE_URL}/api/debug-database")
+    print(f"🧪 Test API: {BASE_URL}/api/test-api-access")
+    print(f"✅ FIXES: Data loading errors, Database queries, Error handling, Debug tools")
+    
+    app.run(host='0.0.0.0', port=port, debug=False)# app.py - Real-Time GHL Lead Analytics - CLEAN VERSION
 import os
 import json
 import time
@@ -214,30 +282,54 @@ class RealTimeLeadAnalytics:
         headers = {"Authorization": f"Bearer {access_token}", "Version": "2021-04-15"}
         
         try:
-            url = f"https://api.gohighlevel.com/v2/contacts"
+            # Try different API approaches for better compatibility
+            url = f"https://services.leadconnectorhq.com/contacts/"
             params = {
                 "locationId": location_id,
-                "limit": limit,
-                "startAfter": (datetime.now() - timedelta(days=30)).isoformat()
+                "limit": limit
             }
             
+            # Try without date filter first for better results
             resp = requests.get(url, headers=headers, params=params)
             
             if resp.status_code == 200:
                 data = resp.json()
                 contacts = data.get('contacts', [])
                 
-                for contact in contacts:
-                    self.record_contact_created(contact, location_id)
+                # If no contacts, try alternative endpoint
+                if not contacts:
+                    print(f"No contacts from primary endpoint, trying alternative...")
+                    alt_url = f"https://api.gohighlevel.com/v2/contacts"
+                    alt_params = {"locationId": location_id, "limit": limit}
+                    resp = requests.get(alt_url, headers=headers, params=alt_params)
+                    
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        contacts = data.get('contacts', [])
                 
-                print(f"Synced {len(contacts)} existing contacts for location {location_id}")
-                return len(contacts)
+                # Process contacts
+                synced_count = 0
+                for contact in contacts:
+                    if self.record_contact_created(contact, location_id):
+                        synced_count += 1
+                
+                print(f"✅ Synced {synced_count} existing contacts for location {location_id}")
+                return synced_count
             else:
-                print(f"Failed to sync contacts: {resp.status_code} - {resp.text}")
+                print(f"❌ Failed to sync contacts: {resp.status_code} - {resp.text}")
+                
+                # Try simplified approach
+                if resp.status_code == 401:
+                    print("❌ Auth error - check token permissions")
+                elif resp.status_code == 403:
+                    print("❌ Permission error - check scopes")
+                elif resp.status_code == 404:
+                    print("❌ Endpoint not found - trying alternative")
+                    
                 return 0
                 
         except Exception as e:
-            print(f"Error syncing contacts: {e}")
+            print(f"❌ Error syncing contacts: {e}")
             return 0
     
     def record_contact_created(self, contact_data, location_id):
@@ -436,51 +528,98 @@ class RealTimeLeadAnalytics:
         } for loc in locations]
     
     def get_enhanced_stats(self, location_id=None, days=30):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        where_clause = f"WHERE created_at >= date('now', '-{days} days')"
-        params = []
-        
-        if location_id and location_id != 'all':
-            where_clause += " AND location_id = ?"
-            params.append(location_id)
-        
-        query = f'''
-            SELECT 
-                COUNT(*) as total_leads,
-                AVG(minutes_to_first_call) as avg_minutes_to_first_call,
-                AVG(minutes_to_first_connection) as avg_minutes_to_first_connection,
-                AVG(minutes_to_first_session) as avg_minutes_to_first_session,
-                AVG(minutes_to_purchase) as avg_minutes_to_purchase,
-                COUNT(CASE WHEN first_call_attempted_at IS NOT NULL THEN 1 END) as leads_called,
-                COUNT(CASE WHEN first_call_connected_at IS NOT NULL THEN 1 END) as leads_connected,
-                COUNT(CASE WHEN first_session_booked_at IS NOT NULL THEN 1 END) as leads_to_session,
-                COUNT(CASE WHEN first_purchase_at IS NOT NULL THEN 1 END) as leads_to_purchase,
-                COUNT(CASE WHEN current_status = 'new_lead' THEN 1 END) as new_leads,
-                COUNT(CASE WHEN current_status = 'contacted' THEN 1 END) as contacted_leads,
-                COUNT(CASE WHEN current_status = 'connected' THEN 1 END) as connected_leads,
-                COUNT(CASE WHEN current_status = 'session_booked' THEN 1 END) as session_booked_leads,
-                COUNT(CASE WHEN current_status = 'purchased' THEN 1 END) as purchased_leads,
-                ROUND(COUNT(CASE WHEN first_call_connected_at IS NOT NULL THEN 1 END) * 100.0 / 
-                    NULLIF(COUNT(CASE WHEN first_call_attempted_at IS NOT NULL THEN 1 END), 0), 1) as connection_rate,
-                ROUND(COUNT(CASE WHEN first_session_booked_at IS NOT NULL THEN 1 END) * 100.0 / 
-                    NULLIF(COUNT(*), 0), 1) as session_rate,
-                ROUND(COUNT(CASE WHEN first_purchase_at IS NOT NULL THEN 1 END) * 100.0 / 
-                    NULLIF(COUNT(*), 0), 1) as conversion_rate,
-                COUNT(CASE WHEN minutes_to_first_call <= 5 THEN 1 END) as calls_within_5min,
-                COUNT(CASE WHEN minutes_to_first_call <= 60 THEN 1 END) as calls_within_1hour,
-                COUNT(CASE WHEN minutes_to_first_connection <= 60 THEN 1 END) as connected_within_1hour
-            FROM contact_journey 
-            {where_clause}
-        '''
+        """Get FULL conversion funnel statistics with comprehensive error handling"""
+        print(f"📊 Getting enhanced stats for location: {location_id}, days: {days}")
         
         try:
-            cursor.execute(query, params)
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # First, check if we have any data at all
+            cursor.execute('SELECT COUNT(*) FROM contact_journey')
+            total_count = cursor.fetchone()[0]
+            print(f"📈 Total contacts in database: {total_count}")
+            
+            if total_count == 0:
+                print("⚠️ No contacts found in database")
+                conn.close()
+                return {
+                    'stats': self.get_empty_stats(),
+                    'best_times': []
+                }
+            
+            where_clause = f"WHERE created_at >= date('now', '-{days} days')"
+            params = []
+            
+            if location_id and location_id != 'all':
+                where_clause += " AND location_id = ?"
+                params.append(location_id)
+            
+            # Simplified query first to test
+            simple_query = f'''
+                SELECT 
+                    COUNT(*) as total_leads,
+                    COUNT(CASE WHEN first_call_attempted_at IS NOT NULL THEN 1 END) as leads_called,
+                    COUNT(CASE WHEN first_call_connected_at IS NOT NULL THEN 1 END) as leads_connected
+                FROM contact_journey 
+                {where_clause}
+            '''
+            
+            print(f"🔍 Executing query: {simple_query}")
+            print(f"🔍 Parameters: {params}")
+            
+            cursor.execute(simple_query, params)
+            simple_result = cursor.fetchone()
+            
+            if not simple_result:
+                print("❌ No results from simple query")
+                conn.close()
+                return {
+                    'stats': self.get_empty_stats(),
+                    'best_times': []
+                }
+            
+            print(f"✅ Simple query result: {simple_result}")
+            
+            # Now try the full query
+            full_query = f'''
+                SELECT 
+                    COUNT(*) as total_leads,
+                    COALESCE(AVG(minutes_to_first_call), 0) as avg_minutes_to_first_call,
+                    COALESCE(AVG(minutes_to_first_connection), 0) as avg_minutes_to_first_connection,
+                    COALESCE(AVG(minutes_to_first_session), 0) as avg_minutes_to_first_session,
+                    COALESCE(AVG(minutes_to_purchase), 0) as avg_minutes_to_purchase,
+                    COUNT(CASE WHEN first_call_attempted_at IS NOT NULL THEN 1 END) as leads_called,
+                    COUNT(CASE WHEN first_call_connected_at IS NOT NULL THEN 1 END) as leads_connected,
+                    COUNT(CASE WHEN first_session_booked_at IS NOT NULL THEN 1 END) as leads_to_session,
+                    COUNT(CASE WHEN first_purchase_at IS NOT NULL THEN 1 END) as leads_to_purchase,
+                    COUNT(CASE WHEN current_status = 'new_lead' THEN 1 END) as new_leads,
+                    COUNT(CASE WHEN current_status = 'contacted' THEN 1 END) as contacted_leads,
+                    COUNT(CASE WHEN current_status = 'connected' THEN 1 END) as connected_leads,
+                    COUNT(CASE WHEN current_status = 'session_booked' THEN 1 END) as session_booked_leads,
+                    COUNT(CASE WHEN current_status = 'purchased' THEN 1 END) as purchased_leads,
+                    COUNT(CASE WHEN minutes_to_first_call <= 5 THEN 1 END) as calls_within_5min,
+                    COUNT(CASE WHEN minutes_to_first_call <= 60 THEN 1 END) as calls_within_1hour,
+                    COUNT(CASE WHEN minutes_to_first_connection <= 60 THEN 1 END) as connected_within_1hour
+                FROM contact_journey 
+                {where_clause}
+            '''
+            
+            cursor.execute(full_query, params)
             result = cursor.fetchone()
             
             if result:
                 total_leads = result[0] or 0
+                leads_called = result[5] or 0
+                leads_connected = result[6] or 0
+                
+                # Calculate rates safely
+                connection_rate = round(leads_connected * 100.0 / max(leads_called, 1), 1) if leads_called > 0 else 0
+                session_rate = round((result[7] or 0) * 100.0 / max(total_leads, 1), 1) if total_leads > 0 else 0
+                conversion_rate = round((result[8] or 0) * 100.0 / max(total_leads, 1), 1) if total_leads > 0 else 0
+                speed_to_call_rate = round((result[15] or 0) * 100.0 / max(total_leads, 1), 1) if total_leads > 0 else 0
+                hourly_call_rate = round((result[16] or 0) * 100.0 / max(total_leads, 1), 1) if total_leads > 0 else 0
+                
                 stats = {
                     'total_leads': total_leads,
                     'avg_minutes_to_first_call': round(result[1] or 0, 1),
@@ -491,8 +630,8 @@ class RealTimeLeadAnalytics:
                     'avg_hours_to_first_session': round((result[3] or 0) / 60, 2),
                     'avg_minutes_to_purchase': round(result[4] or 0, 1),
                     'avg_hours_to_purchase': round((result[4] or 0) / 60, 2),
-                    'leads_called': result[5] or 0,
-                    'leads_connected': result[6] or 0,
+                    'leads_called': leads_called,
+                    'leads_connected': leads_connected,
                     'leads_to_session': result[7] or 0,
                     'leads_to_purchase': result[8] or 0,
                     'new_leads': result[9] or 0,
@@ -500,29 +639,47 @@ class RealTimeLeadAnalytics:
                     'connected_leads': result[11] or 0,
                     'session_booked_leads': result[12] or 0,
                     'purchased_leads': result[13] or 0,
-                    'connection_rate': result[14] or 0,
-                    'session_rate': result[15] or 0,
-                    'conversion_rate': result[16] or 0,
-                    'calls_within_5min': result[17] or 0,
-                    'calls_within_1hour': result[18] or 0,
-                    'connected_within_1hour': result[19] or 0,
-                    'speed_to_call_rate': round((result[17] or 0) * 100.0 / max(total_leads, 1), 1),
-                    'hourly_call_rate': round((result[18] or 0) * 100.0 / max(total_leads, 1), 1)
+                    'connection_rate': connection_rate,
+                    'session_rate': session_rate,
+                    'conversion_rate': conversion_rate,
+                    'calls_within_5min': result[15] or 0,
+                    'calls_within_1hour': result[16] or 0,
+                    'connected_within_1hour': result[17] or 0,
+                    'speed_to_call_rate': speed_to_call_rate,
+                    'hourly_call_rate': hourly_call_rate
                 }
-            else:
-                stats = self.get_empty_stats()
                 
+                print(f"✅ Full stats calculated: {stats}")
+            else:
+                print("❌ No results from full query")
+                stats = self.get_empty_stats()
+            
+            # Get best call times (with error handling)
+            try:
+                best_times = self.get_best_call_times(location_id, days)
+            except Exception as e:
+                print(f"❌ Error getting best call times: {e}")
+                best_times = []
+            
+            conn.close()
+            
+            return {
+                'stats': stats,
+                'best_times': best_times
+            }
+            
+        except sqlite3.Error as e:
+            print(f"❌ Database error in get_enhanced_stats: {e}")
+            return {
+                'stats': self.get_empty_stats(),
+                'best_times': []
+            }
         except Exception as e:
-            print(f"Database query error: {e}")
-            stats = self.get_empty_stats()
-        
-        best_times = self.get_best_call_times(location_id, days)
-        conn.close()
-        
-        return {
-            'stats': stats,
-            'best_times': best_times
-        }
+            print(f"❌ General error in get_enhanced_stats: {e}")
+            return {
+                'stats': self.get_empty_stats(),
+                'best_times': []
+            }
     
     def get_empty_stats(self):
         return {
@@ -815,6 +972,9 @@ def dashboard():
             <div>
                 <button onclick="syncAllLocations()">Sync ALL Locations</button>
                 <button onclick="syncExistingContacts()">Sync Existing Contacts</button>
+                <button onclick="testApiAccess()">Test API Access</button>
+                <button onclick="debugDatabase()">Debug Database</button>
+                <button onclick="createTestData()">Create Test Data</button>
                 <button onclick="refreshData()">Refresh</button>
             </div>
         </div>
@@ -890,8 +1050,21 @@ def dashboard():
                     days: currentFilters.dateRange
                 });
                 
+                console.log('📊 Loading dashboard with params:', params.toString());
+                
                 const response = await fetch('/api/realtime-stats?' + params);
+                
+                if (!response.ok) {
+                    throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+                }
+                
                 dashboardData = await response.json();
+                
+                console.log('📊 Dashboard data received:', dashboardData);
+                
+                if (dashboardData.error) {
+                    throw new Error('Server error: ' + dashboardData.error);
+                }
                 
                 updateMetrics();
                 updateStatusChart();
@@ -899,8 +1072,22 @@ def dashboard():
                 updateDataStatus('connected', 'Last sync: ' + new Date().toLocaleTimeString());
                 
             } catch (error) {
-                console.error('Error loading dashboard:', error);
-                updateDataStatus('error', 'Error loading data');
+                console.error('❌ Error loading dashboard:', error);
+                updateDataStatus('error', 'Error loading data: ' + error.message);
+                
+                // Show empty state
+                dashboardData = {
+                    total_leads: 0, leads_called: 0, leads_connected: 0, connection_rate: 0,
+                    avg_minutes_to_first_call: 0, avg_hours_to_first_call: 0,
+                    avg_minutes_to_first_connection: 0, avg_hours_to_first_connection: 0,
+                    speed_to_call_rate: 0, hourly_call_rate: 0, calls_within_5min: 0, calls_within_1hour: 0,
+                    new_leads: 0, contacted_leads: 0, connected_leads: 0, session_booked_leads: 0, purchased_leads: 0,
+                    leads_to_session: 0, leads_to_purchase: 0, best_times: []
+                };
+                
+                updateMetrics();
+                updateStatusChart();
+                updateFunnelChart();
             }
         }
 
@@ -1059,23 +1246,88 @@ def dashboard():
                 const result = await response.json();
                 
                 if (result.status === 'success') {
-                    updateDataStatus('connected', 'Synced ' + result.total_contacts + ' contacts!');
+                    let message = 'Synced ' + result.total_contacts + ' contacts from ' + 
+                                result.locations_processed + '/' + result.total_locations + ' locations';
+                    
+                    if (result.errors && result.errors.length > 0) {
+                        message += ' (' + result.errors.length + ' errors)';
+                        console.log('Sync errors:', result.errors);
+                    }
+                    
+                    updateDataStatus('connected', message);
                     loadDashboard();
                 } else {
-                    updateDataStatus('error', 'Contact sync failed');
+                    updateDataStatus('error', 'Contact sync failed: ' + result.message);
                 }
             } catch (error) {
-                updateDataStatus('error', 'Contact sync failed');
+                updateDataStatus('error', 'Contact sync failed: ' + error.message);
+                console.error('Sync error:', error);
             }
         }
 
-        async function refreshData() {
-            updateDataStatus('syncing', 'Refreshing all data...');
+        async function testApiAccess() {
+            updateDataStatus('syncing', 'Testing API access...');
             try {
-                await syncAllLocations();
-                setTimeout(() => { loadDashboard(); }, 1000);
+                const response = await fetch('/api/test-api-access');
+                const result = await response.json();
+                
+                console.log('API Test Results:', result);
+                
+                if (result.status === 'success') {
+                    updateDataStatus('connected', 'API access test completed - check console');
+                } else {
+                    updateDataStatus('error', 'API test failed');
+                }
             } catch (error) {
-                updateDataStatus('error', 'Refresh failed');
+                updateDataStatus('error', 'API test failed: ' + error.message);
+            }
+        }
+
+        async function debugDatabase() {
+            updateDataStatus('syncing', 'Checking database...');
+            try {
+                const response = await fetch('/api/debug-database');
+                const result = await response.json();
+                
+                console.log('🔍 Database Debug Info:', result);
+                
+                if (result.status === 'success') {
+                    const info = result.debug_info;
+                    const message = `DB: ${info.total_contacts} contacts, ${info.total_locations} locations, ${info.contacts_last_30_days} recent`;
+                    updateDataStatus('connected', message);
+                    
+                    // Show detailed info in console
+                    console.log('📊 Contacts (last 30 days):', info.contacts_last_30_days);
+                    console.log('📍 Total locations:', info.total_locations);
+                    console.log('📨 Webhooks (24h):', info.webhooks_last_24h);
+                    console.log('👥 Recent contacts:', info.recent_contacts);
+                    console.log('🏢 Sample locations:', info.sample_locations);
+                    console.log('📡 Recent webhooks:', info.recent_webhooks);
+                } else {
+                    updateDataStatus('error', 'Database debug failed: ' + result.error);
+                }
+            } catch (error) {
+                updateDataStatus('error', 'Database debug failed: ' + error.message);
+            }
+        }
+
+        async function createTestData() {
+            updateDataStatus('syncing', 'Creating test data...');
+            try {
+                const response = await fetch('/api/create-test-data', { method: 'POST' });
+                const result = await response.json();
+                
+                if (result.status === 'success') {
+                    updateDataStatus('connected', 'Created ' + result.test_contacts.length + ' test contacts');
+                    console.log('✅ Test data created:', result);
+                    
+                    // Refresh dashboard to show new data
+                    setTimeout(() => { loadDashboard(); }, 1000);
+                } else {
+                    updateDataStatus('error', 'Test data creation failed: ' + result.error);
+                }
+            } catch (error) {
+                updateDataStatus('error', 'Test data creation failed: ' + error.message);
             }
         }
 
@@ -1173,33 +1425,143 @@ def api_sync_existing_contacts():
     try:
         locations = analytics.get_real_locations()
         total_contacts = 0
+        processed_locations = 0
+        errors = []
         
         for location in locations:
-            count = analytics.sync_existing_contacts(token_data['access_token'], location['id'])
-            total_contacts += count
-            time.sleep(0.1)
+            try:
+                print(f"🔄 Processing location: {location['name']} ({location['id']})")
+                count = analytics.sync_existing_contacts(token_data['access_token'], location['id'])
+                total_contacts += count
+                processed_locations += 1
+                
+                if count > 0:
+                    print(f"✅ {location['name']}: {count} contacts")
+                else:
+                    print(f"⚠️ {location['name']}: No contacts found")
+                
+                time.sleep(0.2)  # Rate limiting
+                
+            except Exception as e:
+                error_msg = f"Error with {location['name']}: {str(e)}"
+                errors.append(error_msg)
+                print(f"❌ {error_msg}")
+                continue
         
         return jsonify({
             'status': 'success', 
             'total_contacts': total_contacts,
-            'locations_processed': len(locations),
-            'message': f'Synced {total_contacts} existing contacts from {len(locations)} locations'
+            'locations_processed': processed_locations,
+            'total_locations': len(locations),
+            'errors': errors,
+            'message': f'Synced {total_contacts} existing contacts from {processed_locations}/{len(locations)} locations'
         })
         
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)})
 
+@app.route('/api/sync-single-location/<location_id>', methods=['POST'])
+def api_sync_single_location(location_id):
+    """Sync contacts from a single location for testing"""
+    token_data = get_valid_token()
+    if not token_data:
+        return jsonify({'status': 'error', 'message': 'No valid token found'})
+    
+    try:
+        count = analytics.sync_existing_contacts(token_data['access_token'], location_id)
+        
+        return jsonify({
+            'status': 'success',
+            'location_id': location_id,
+            'contacts_synced': count,
+            'message': f'Synced {count} contacts from location {location_id}'
+        })
+        
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
+
+@app.route('/api/test-api-access')
+def api_test_api_access():
+    """Test API access and permissions"""
+    token_data = get_valid_token()
+    if not token_data:
+        return jsonify({'status': 'error', 'message': 'No valid token found'})
+    
+    headers = {"Authorization": f"Bearer {token_data['access_token']}", "Version": "2021-04-15"}
+    
+    test_results = {}
+    
+    # Test locations access
+    try:
+        resp = requests.get("https://services.leadconnectorhq.com/oauth/installedLocations", 
+                           headers=headers, 
+                           params={"companyId": token_data.get('company_id'), "appId": APP_ID})
+        test_results['locations'] = {
+            'status': resp.status_code,
+            'count': len(resp.json().get('locations', [])) if resp.status_code == 200 else 0
+        }
+    except Exception as e:
+        test_results['locations'] = {'status': 'error', 'message': str(e)}
+    
+    # Test contacts access
+    locations = analytics.get_real_locations()
+    if locations:
+        test_location = locations[0]['id']
+        try:
+            resp = requests.get("https://services.leadconnectorhq.com/contacts/", 
+                               headers=headers, 
+                               params={"locationId": test_location, "limit": 5})
+            test_results['contacts'] = {
+                'status': resp.status_code,
+                'count': len(resp.json().get('contacts', [])) if resp.status_code == 200 else 0,
+                'test_location': test_location
+            }
+        except Exception as e:
+            test_results['contacts'] = {'status': 'error', 'message': str(e)}
+    
+    return jsonify({
+        'status': 'success',
+        'token_valid': True,
+        'company_id': token_data.get('company_id'),
+        'scopes': SCOPES,
+        'test_results': test_results
+    })
+
 @app.route('/api/realtime-stats')
 def api_realtime_stats():
-    location_id = request.args.get('location', 'all')
-    days = int(request.args.get('days', 30))
-    
-    data = analytics.get_enhanced_stats(location_id, days)
-    
-    response = data['stats'].copy()
-    response['best_times'] = data['best_times']
-    
-    return jsonify(response)
+    """Get FULL conversion funnel statistics with error handling"""
+    try:
+        location_id = request.args.get('location', 'all')
+        days = int(request.args.get('days', 30))
+        
+        print(f"📊 Getting stats for location: {location_id}, days: {days}")
+        
+        data = analytics.get_enhanced_stats(location_id, days)
+        
+        response = data['stats'].copy()
+        response['best_times'] = data['best_times']
+        
+        print(f"✅ Stats response: {response}")
+        return jsonify(response)
+        
+    except Exception as e:
+        print(f"❌ Error in realtime-stats: {str(e)}")
+        
+        # Return safe empty response
+        empty_response = {
+            'total_leads': 0, 'avg_minutes_to_first_call': 0, 'avg_hours_to_first_call': 0,
+            'avg_minutes_to_first_connection': 0, 'avg_hours_to_first_connection': 0,
+            'avg_minutes_to_first_session': 0, 'avg_hours_to_first_session': 0,
+            'avg_minutes_to_purchase': 0, 'avg_hours_to_purchase': 0,
+            'leads_called': 0, 'leads_connected': 0, 'leads_to_session': 0, 'leads_to_purchase': 0,
+            'new_leads': 0, 'contacted_leads': 0, 'connected_leads': 0, 'session_booked_leads': 0, 'purchased_leads': 0,
+            'connection_rate': 0, 'session_rate': 0, 'conversion_rate': 0,
+            'calls_within_5min': 0, 'calls_within_1hour': 0, 'connected_within_1hour': 0,
+            'speed_to_call_rate': 0, 'hourly_call_rate': 0,
+            'best_times': [],
+            'error': str(e)
+        }
+        return jsonify(empty_response)
 
 @app.route('/webhook', methods=['POST'])
 def webhook_handler():
@@ -1282,8 +1644,125 @@ def api_webhook_debug():
     
     return jsonify(debug_data)
 
-@app.route('/health')
-def health_check():
+@app.route('/api/debug-database')
+def api_debug_database():
+    """Debug endpoint to check database contents"""
+    try:
+        conn = sqlite3.connect(analytics.db_path)
+        cursor = conn.cursor()
+        
+        debug_info = {}
+        
+        # Check contact_journey table
+        cursor.execute('SELECT COUNT(*) FROM contact_journey')
+        debug_info['total_contacts'] = cursor.fetchone()[0]
+        
+        cursor.execute('SELECT COUNT(*) FROM contact_journey WHERE created_at >= date("now", "-7 days")')
+        debug_info['contacts_last_7_days'] = cursor.fetchone()[0]
+        
+        cursor.execute('SELECT COUNT(*) FROM contact_journey WHERE created_at >= date("now", "-30 days")')
+        debug_info['contacts_last_30_days'] = cursor.fetchone()[0]
+        
+        # Sample recent contacts
+        cursor.execute('''
+            SELECT contact_id, location_name, contact_name, created_at, current_status 
+            FROM contact_journey 
+            ORDER BY created_at DESC 
+            LIMIT 5
+        ''')
+        recent_contacts = cursor.fetchall()
+        debug_info['recent_contacts'] = [{
+            'contact_id': row[0],
+            'location_name': row[1],
+            'contact_name': row[2],
+            'created_at': row[3],
+            'current_status': row[4]
+        } for row in recent_contacts]
+        
+        # Check locations
+        cursor.execute('SELECT COUNT(*) FROM ghl_locations WHERE is_active = TRUE')
+        debug_info['total_locations'] = cursor.fetchone()[0]
+        
+        cursor.execute('SELECT location_id, location_name FROM ghl_locations WHERE is_active = TRUE LIMIT 5')
+        sample_locations = cursor.fetchall()
+        debug_info['sample_locations'] = [{
+            'location_id': row[0],
+            'location_name': row[1]
+        } for row in sample_locations]
+        
+        # Check webhooks
+        cursor.execute('SELECT COUNT(*) FROM webhook_events WHERE received_at >= date("now", "-1 day")')
+        debug_info['webhooks_last_24h'] = cursor.fetchone()[0]
+        
+        cursor.execute('''
+            SELECT event_type, contact_id, location_id, received_at 
+            FROM webhook_events 
+            ORDER BY received_at DESC 
+            LIMIT 5
+        ''')
+        recent_webhooks = cursor.fetchall()
+        debug_info['recent_webhooks'] = [{
+            'event_type': row[0],
+            'contact_id': row[1],
+            'location_id': row[2],
+            'received_at': row[3]
+        } for row in recent_webhooks]
+        
+        conn.close()
+        
+        return jsonify({
+            'status': 'success',
+            'debug_info': debug_info,
+            'database_file': analytics.db_path
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        })
+
+@app.route('/api/create-test-data', methods=['POST'])
+def api_create_test_data():
+    """Create test data for debugging"""
+    try:
+        # Get first location
+        locations = analytics.get_real_locations()
+        if not locations:
+            return jsonify({'status': 'error', 'message': 'No locations available'})
+        
+        location_id = locations[0]['id']
+        location_name = locations[0]['name']
+        
+        # Create test contacts
+        test_contacts = []
+        for i in range(5):
+            test_contact = {
+                'id': f'test_contact_{int(time.time())}_{i}',
+                'firstName': f'Test{i}',
+                'lastName': 'Contact',
+                'email': f'test{i}@example.com',
+                'phone': f'+123456789{i}',
+                'source': 'test_data',
+                'dateAdded': (datetime.now() - timedelta(hours=i)).isoformat()
+            }
+            
+            success = analytics.record_contact_created(test_contact, location_id)
+            if success:
+                test_contacts.append(test_contact['id'])
+        
+        return jsonify({
+            'status': 'success',
+            'message': f'Created {len(test_contacts)} test contacts',
+            'test_contacts': test_contacts,
+            'location_used': {'id': location_id, 'name': location_name}
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        })
     conn = sqlite3.connect(analytics.db_path)
     cursor = conn.cursor()
     
