@@ -199,54 +199,54 @@ class DebugLeadAnalytics:
         return []
     
     def debug_contacts_api(self, access_token, location_id):
-        """Enhanced debug with multiple API versions and detailed responses"""
-        print(f"🔍 COMPREHENSIVE CONTACTS API DEBUG for location: {location_id}")
+        """Enhanced debug using CORRECT GHL API version and endpoints"""
+        print(f"🔍 TESTING CORRECT GHL API APPROACHES for location: {location_id}")
         
         all_results = []
         
-        # Test different API versions and endpoints
+        # Based on GHL documentation - test the RIGHT endpoints
         test_approaches = [
             {
-                "name": "Standard Contacts API v2021-04-15",
-                "url": "https://services.leadconnectorhq.com/contacts/",
-                "headers": {"Authorization": f"Bearer {access_token}", "Version": "2021-04-15"},
-                "params": {"locationId": location_id, "limit": 20}
-            },
-            {
-                "name": "Standard Contacts API v2021-07-28", 
+                "name": "GHL Contacts List API v2021-07-28",
                 "url": "https://services.leadconnectorhq.com/contacts/",
                 "headers": {"Authorization": f"Bearer {access_token}", "Version": "2021-07-28"},
-                "params": {"locationId": location_id, "limit": 20}
+                "params": {"locationId": location_id, "limit": 25}
             },
             {
-                "name": "Contacts API without version",
-                "url": "https://services.leadconnectorhq.com/contacts/",
-                "headers": {"Authorization": f"Bearer {access_token}"},
-                "params": {"locationId": location_id, "limit": 20}
-            },
-            {
-                "name": "Search Contacts API",
+                "name": "GHL Contacts Search v2021-07-28",
                 "url": "https://services.leadconnectorhq.com/contacts/search",
-                "headers": {"Authorization": f"Bearer {access_token}", "Version": "2021-04-15"},
-                "params": {"locationId": location_id, "limit": 20}
+                "headers": {"Authorization": f"Bearer {access_token}", "Version": "2021-07-28"},
+                "params": {"locationId": location_id, "limit": 25}
             },
             {
-                "name": "Location-specific Contacts API",
+                "name": "GHL Location Contacts v2021-07-28",
                 "url": f"https://services.leadconnectorhq.com/locations/{location_id}/contacts",
-                "headers": {"Authorization": f"Bearer {access_token}", "Version": "2021-04-15"},
-                "params": {"limit": 20}
+                "headers": {"Authorization": f"Bearer {access_token}", "Version": "2021-07-28"},
+                "params": {"limit": 25}
             },
             {
-                "name": "Contacts with query parameter",
+                "name": "GHL Contacts with startAfter v2021-07-28",
                 "url": "https://services.leadconnectorhq.com/contacts/",
-                "headers": {"Authorization": f"Bearer {access_token}", "Version": "2021-04-15"},
-                "params": {"locationId": location_id, "limit": 20, "query": ""}
+                "headers": {"Authorization": f"Bearer {access_token}", "Version": "2021-07-28"},
+                "params": {"locationId": location_id, "limit": 25, "startAfter": ""}
             },
             {
-                "name": "All Contacts (no location filter)",
+                "name": "GHL All Contacts (no location filter)",
                 "url": "https://services.leadconnectorhq.com/contacts/",
-                "headers": {"Authorization": f"Bearer {access_token}", "Version": "2021-04-15"},
-                "params": {"limit": 10}  # No locationId to see if we get any contacts at all
+                "headers": {"Authorization": f"Bearer {access_token}", "Version": "2021-07-28"},
+                "params": {"limit": 10}
+            },
+            {
+                "name": "Direct GHL REST API",
+                "url": f"https://rest.gohighlevel.com/v1/contacts/",
+                "headers": {"Authorization": f"Bearer {access_token}"},
+                "params": {"locationId": location_id, "limit": 25}
+            },
+            {
+                "name": "Alternative Services Endpoint",
+                "url": "https://services.leadconnectorhq.com/contacts/",
+                "headers": {"Authorization": f"Bearer {access_token}", "Version": "2021-07-28"},
+                "params": {"location_id": location_id, "limit": 25}  # Different param name
             }
         ]
         
@@ -259,81 +259,117 @@ class DebugLeadAnalytics:
                 
                 resp = requests.get(approach['url'], headers=approach['headers'], params=approach['params'])
                 print(f"📊 Status Code: {resp.status_code}")
+                print(f"📄 Response Headers: {dict(resp.headers)}")
                 
                 result = {
                     "approach": approach['name'],
                     "status_code": resp.status_code,
                     "url": approach['url'],
-                    "params": approach['params']
+                    "params": approach['params'],
+                    "response_headers": dict(resp.headers)
                 }
                 
                 if resp.status_code == 200:
                     try:
                         data = resp.json()
-                        contacts = data.get('contacts', [])
+                        print(f"📦 Response Keys: {list(data.keys())}")
+                        
+                        # Handle different response structures
+                        contacts = []
+                        if 'contacts' in data:
+                            contacts = data['contacts']
+                        elif 'data' in data:
+                            contacts = data['data']
+                        elif isinstance(data, list):
+                            contacts = data
                         
                         result.update({
                             "contacts_found": len(contacts),
-                            "response_keys": list(data.keys()),
-                            "total_count": data.get('count', data.get('total', 'unknown')),
-                            "meta": data.get('meta', {}),
+                            "response_structure": {
+                                "keys": list(data.keys()),
+                                "contacts_key_exists": 'contacts' in data,
+                                "data_key_exists": 'data' in data,
+                                "is_array": isinstance(data, list),
+                                "total_from_meta": data.get('meta', {}).get('total', 'unknown'),
+                                "count_field": data.get('count', data.get('total', 'none'))
+                            },
                             "sample_contact": contacts[0] if contacts else None,
-                            "full_response": data if len(contacts) == 0 else {"contacts": f"{len(contacts)} contacts", "other_keys": list(data.keys())}
+                            "raw_response_preview": str(data)[:500] + "..." if len(str(data)) > 500 else data
                         })
                         
-                        print(f"✅ SUCCESS: Found {len(contacts)} contacts")
+                        print(f"✅ FOUND {len(contacts)} CONTACTS!")
                         if contacts:
                             first = contacts[0]
-                            print(f"👤 First contact: {first.get('firstName', '')} {first.get('lastName', '')} ({first.get('id', 'no-id')})")
-                            all_results.append(result)
-                            # If we found contacts, also save them and return
-                            for contact in contacts[:5]:  # Save first 5 for testing
+                            print(f"👤 First contact: {first.get('firstName', first.get('name', ''))} {first.get('lastName', '')} ({first.get('id', 'no-id')})")
+                            print(f"📧 Email: {first.get('email', 'no-email')}")
+                            print(f"📱 Phone: {first.get('phone', 'no-phone')}")
+                            
+                            # Save a few contacts for testing
+                            for contact in contacts[:3]:
                                 self.add_contact(contact, location_id)
+                            
+                            all_results.append(result)
+                            self.last_debug_results = all_results
                             return contacts
                         else:
-                            print(f"📭 Response structure: {list(data.keys())}")
-                            print(f"📄 Full response: {json.dumps(data, indent=2)[:500]}...")
+                            print(f"📭 Empty response structure: {data}")
                             
-                    except json.JSONDecodeError:
-                        result["error"] = "Invalid JSON response"
+                    except json.JSONDecodeError as e:
+                        result["error"] = f"Invalid JSON response: {str(e)}"
                         result["raw_response"] = resp.text[:500]
-                        print(f"❌ Invalid JSON: {resp.text[:200]}...")
+                        print(f"❌ JSON Error: {e}")
+                        print(f"Raw response: {resp.text[:200]}...")
                         
                 elif resp.status_code == 401:
-                    result["error"] = "Unauthorized - token or permissions issue"
+                    result["error"] = "Unauthorized - Check token and permissions"
+                    result["response_text"] = resp.text
                     print(f"🔐 UNAUTHORIZED: {resp.text}")
                     
                 elif resp.status_code == 403:
-                    result["error"] = "Forbidden - insufficient permissions"
+                    result["error"] = "Forbidden - Need contacts.readonly scope"
+                    result["response_text"] = resp.text
                     print(f"🚫 FORBIDDEN: {resp.text}")
                     
-                elif resp.status_code == 404:
-                    result["error"] = "Not Found - wrong endpoint"
-                    print(f"❓ NOT FOUND: {resp.text}")
+                elif resp.status_code == 422:
+                    result["error"] = "Unprocessable Entity - Check parameters"
+                    result["response_text"] = resp.text
+                    print(f"⚠️ UNPROCESSABLE: {resp.text}")
                     
                 else:
                     result["error"] = f"HTTP {resp.status_code}"
-                    result["raw_response"] = resp.text[:500]
+                    result["response_text"] = resp.text
                     print(f"❌ ERROR {resp.status_code}: {resp.text[:200]}...")
                 
                 all_results.append(result)
                 self.log_api_call(approach['url'], "GET", resp.status_code, approach['params'], resp.text[:1000])
                 
-                time.sleep(0.3)  # Rate limiting between tests
+                time.sleep(0.5)  # Longer rate limiting
+                
+            except requests.exceptions.RequestException as e:
+                error_result = {
+                    "approach": approach['name'],
+                    "error": f"Network error: {str(e)}",
+                    "exception_type": "RequestException"
+                }
+                print(f"🌐 NETWORK ERROR: {e}")
+                all_results.append(error_result)
                 
             except Exception as e:
                 error_result = {
                     "approach": approach['name'],
-                    "error": str(e),
+                    "error": f"Unexpected error: {str(e)}",
                     "exception_type": type(e).__name__
                 }
-                print(f"💥 EXCEPTION: {e}")
+                print(f"💥 UNEXPECTED ERROR: {e}")
                 all_results.append(error_result)
-                self.log_api_call(approach['url'], "GET", 0, approach['params'], None, str(e))
         
-        print(f"\n📋 SUMMARY: Tested {len(test_approaches)} approaches, all returned 0 contacts")
+        print(f"\n❌ ALL {len(test_approaches)} APPROACHES RETURNED 0 CONTACTS")
+        print("🤔 This suggests either:")
+        print("   1. The location truly has no contacts")
+        print("   2. Contacts are in a different status/stage")
+        print("   3. Permission/scope issue")
+        print("   4. Different API authentication needed")
         
-        # Store detailed results for the API response
         self.last_debug_results = all_results
         return []
     
@@ -1091,3 +1127,4 @@ if __name__ == '__main__':
     print("🎯 MISSION: Find out why contacts aren't showing!")
     
     app.run(host='0.0.0.0', port=port, debug=True)
+    
