@@ -1,4 +1,4 @@
-# app.py - Real-Time GHL Lead Analytics - COMPLETE CLEAN VERSION
+# app.py - Real-Time GHL Lead Analytics - COMPLETE FIXED VERSION
 import os
 import json
 import time
@@ -40,42 +40,7 @@ class RealTimeLeadAnalytics:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        cursor.execute('SELECT COUNT(*) FROM ghl_locations WHERE is_active = TRUE')
-    total_locations = cursor.fetchone()[0]
-    
-    cursor.execute('SELECT COUNT(*) FROM webhook_events WHERE received_at >= date("now", "-1 day")')
-    recent_webhooks = cursor.fetchone()[0]
-    
-    conn.close()
-    
-    token_data = get_valid_token()
-    token_status = 'valid' if token_data else 'missing'
-    
-    return jsonify({
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-        'base_url': BASE_URL,
-        'webhook_url': f'{BASE_URL}/webhook',
-        'version': '3.0.0 - WORKING',
-        'database_health': {
-            'total_contacts': total_contacts,
-            'total_locations': total_locations,
-            'recent_webhooks_24h': recent_webhooks
-        },
-        'oauth_status': token_status,
-        'scopes_configured': SCOPES
-    })
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    print(f"Real-Time GHL Lead Analytics v3.0 - WORKING starting on port {port}")
-    print(f"Base URL: {BASE_URL}")
-    print(f"Webhook URL: {BASE_URL}/webhook")
-    print(f"Dashboard: {BASE_URL}/dashboard")
-    print(f"Health: {BASE_URL}/health")
-    print("READY: Clean deployment, All locations sync, Lead tracking")
-    
-    app.run(host='0.0.0.0', port=port, debug=False)('''
+        cursor.execute('''
             CREATE TABLE IF NOT EXISTS contact_journey (
                 contact_id TEXT PRIMARY KEY,
                 location_id TEXT NOT NULL,
@@ -783,10 +748,52 @@ def webhook_handler():
 
 @app.route('/health')
 def health_check():
-    conn = sqlite3.connect(analytics.db_path)
-    cursor = conn.cursor()
+    try:
+        conn = sqlite3.connect(analytics.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT COUNT(*) FROM contact_journey')
+        total_contacts = cursor.fetchone()[0]
+        
+        cursor.execute('SELECT COUNT(*) FROM ghl_locations WHERE is_active = TRUE')
+        total_locations = cursor.fetchone()[0]
+        
+        cursor.execute('SELECT COUNT(*) FROM webhook_events WHERE received_at >= date("now", "-1 day")')
+        recent_webhooks = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        token_data = get_valid_token()
+        token_status = 'valid' if token_data else 'missing'
+        
+        return jsonify({
+            'status': 'healthy',
+            'timestamp': datetime.now().isoformat(),
+            'base_url': BASE_URL,
+            'webhook_url': f'{BASE_URL}/webhook',
+            'version': '3.0.0 - WORKING',
+            'database_health': {
+                'total_contacts': total_contacts,
+                'total_locations': total_locations,
+                'recent_webhooks_24h': recent_webhooks
+            },
+            'oauth_status': token_status,
+            'scopes_configured': SCOPES
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    print(f"Real-Time GHL Lead Analytics v3.0 - WORKING starting on port {port}")
+    print(f"Base URL: {BASE_URL}")
+    print(f"Webhook URL: {BASE_URL}/webhook")
+    print(f"Dashboard: {BASE_URL}/dashboard")
+    print(f"Health: {BASE_URL}/health")
+    print("READY: Clean deployment, All locations sync, Lead tracking")
     
-    cursor.execute('SELECT COUNT(*) FROM contact_journey')
-    total_contacts = cursor.fetchone()[0]
-    
-    cursor.execute
+    app.run(host='0.0.0.0', port=port, debug=False)
