@@ -1,4 +1,4 @@
-# app.py - Simplified Lead Analytics - GET DATA SHOWING FIRST
+# debug_app.py - DEBUG VERSION to see exactly what's happening
 import os
 import json
 import time
@@ -31,8 +31,8 @@ SCOPES = [
     "locations/tags.readonly"
 ]
 
-class SimpleLeadAnalytics:
-    def __init__(self, db_path="simple_analytics.db"):
+class DebugLeadAnalytics:
+    def __init__(self, db_path="debug_analytics.db"):
         self.db_path = db_path
         self.init_database()
     
@@ -40,7 +40,6 @@ class SimpleLeadAnalytics:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # SIMPLE: Just track contacts and basic info
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS contacts (
                 contact_id TEXT PRIMARY KEY,
@@ -83,36 +82,188 @@ class SimpleLeadAnalytics:
         ''')
         
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS webhook_events (
+            CREATE TABLE IF NOT EXISTS api_debug_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_type TEXT,
-                contact_id TEXT,
-                location_id TEXT,
-                raw_data TEXT,
-                received_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                endpoint TEXT,
+                method TEXT,
+                status_code INTEGER,
+                request_data TEXT,
+                response_data TEXT,
+                error_message TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
         conn.commit()
         conn.close()
-        print("✅ Simple database initialized")
+        print("✅ Debug database initialized")
+    
+    def log_api_call(self, endpoint, method, status_code, request_data=None, response_data=None, error_message=None):
+        """Log all API calls for debugging"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            INSERT INTO api_debug_log 
+            (endpoint, method, status_code, request_data, response_data, error_message)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            endpoint, method, status_code, 
+            json.dumps(request_data) if request_data else None,
+            response_data[:1000] if response_data else None,  # Truncate long responses
+            error_message
+        ))
+        
+        conn.commit()
+        conn.close()
+    
+    def test_api_connection(self, access_token):
+        """Test basic API connectivity"""
+        headers = {"Authorization": f"Bearer {access_token}", "Version": "2021-04-15"}
+        
+        print("🔍 TESTING API CONNECTION...")
+        
+        # Test 1: Get current user info
+        try:
+            url = "https://services.leadconnectorhq.com/users/current"
+            resp = requests.get(url, headers=headers)
+            print(f"👤 User Info API: {resp.status_code}")
+            self.log_api_call(url, "GET", resp.status_code, None, resp.text[:500])
+            
+            if resp.status_code == 200:
+                user_data = resp.json()
+                print(f"✅ User: {user_data.get('name', 'Unknown')} - Company: {user_data.get('companyId', 'Unknown')}")
+                return user_data
+            else:
+                print(f"❌ User API failed: {resp.text}")
+                return None
+                
+        except Exception as e:
+            print(f"❌ User API error: {e}")
+            self.log_api_call(url, "GET", 0, None, None, str(e))
+            return None
+    
+    def debug_locations_api(self, access_token, company_id):
+        """Debug the locations API with multiple approaches"""
+        headers = {"Authorization": f"Bearer {access_token}", "Version": "2021-04-15"}
+        
+        print(f"🔍 DEBUGGING LOCATIONS API for company: {company_id}")
+        
+        # Approach 1: Installed locations
+        try:
+            url1 = "https://services.leadconnectorhq.com/oauth/installedLocations"
+            params1 = {"companyId": company_id, "appId": APP_ID, "isInstalled": True}
+            
+            print(f"📡 Testing: {url1}")
+            print(f"📋 Params: {params1}")
+            
+            resp1 = requests.get(url1, headers=headers, params=params1)
+            print(f"📊 Response: {resp1.status_code}")
+            
+            self.log_api_call(url1, "GET", resp1.status_code, params1, resp1.text[:1000])
+            
+            if resp1.status_code == 200:
+                data1 = resp1.json()
+                print(f"✅ Installed Locations Found: {len(data1.get('locations', []))}")
+                if data1.get('locations'):
+                    print(f"🏢 First location: {data1['locations'][0].get('name', 'No name')}")
+                return data1.get('locations', [])
+            else:
+                print(f"❌ Installed locations failed: {resp1.text}")
+                
+        except Exception as e:
+            print(f"❌ Installed locations error: {e}")
+        
+        # Approach 2: Direct locations API
+        try:
+            url2 = "https://services.leadconnectorhq.com/locations/"
+            params2 = {"companyId": company_id}
+            
+            print(f"📡 Testing: {url2}")
+            resp2 = requests.get(url2, headers=headers, params=params2)
+            print(f"📊 Response: {resp2.status_code}")
+            
+            self.log_api_call(url2, "GET", resp2.status_code, params2, resp2.text[:1000])
+            
+            if resp2.status_code == 200:
+                data2 = resp2.json()
+                locations = data2.get('locations', [])
+                print(f"✅ Direct Locations Found: {len(locations)}")
+                return locations
+            else:
+                print(f"❌ Direct locations failed: {resp2.text}")
+                
+        except Exception as e:
+            print(f"❌ Direct locations error: {e}")
+        
+        return []
+    
+    def debug_contacts_api(self, access_token, location_id):
+        """Debug the contacts API with detailed logging"""
+        headers = {"Authorization": f"Bearer {access_token}", "Version": "2021-04-15"}
+        
+        print(f"🔍 DEBUGGING CONTACTS API for location: {location_id}")
+        
+        # Test different contact API approaches
+        approaches = [
+            {
+                "name": "Standard Contacts API",
+                "url": "https://services.leadconnectorhq.com/contacts/",
+                "params": {"locationId": location_id, "limit": 10}
+            },
+            {
+                "name": "Search Contacts API", 
+                "url": "https://services.leadconnectorhq.com/contacts/search",
+                "params": {"locationId": location_id, "limit": 10}
+            }
+        ]
+        
+        for approach in approaches:
+            try:
+                print(f"📡 Testing: {approach['name']} - {approach['url']}")
+                print(f"📋 Params: {approach['params']}")
+                
+                resp = requests.get(approach['url'], headers=headers, params=approach['params'])
+                print(f"📊 Response: {resp.status_code}")
+                
+                self.log_api_call(approach['url'], "GET", resp.status_code, approach['params'], resp.text[:1000])
+                
+                if resp.status_code == 200:
+                    data = resp.json()
+                    contacts = data.get('contacts', [])
+                    print(f"✅ {approach['name']}: Found {len(contacts)} contacts")
+                    
+                    if contacts:
+                        first_contact = contacts[0]
+                        print(f"👤 Sample contact: {first_contact.get('firstName', '')} {first_contact.get('lastName', '')} - {first_contact.get('email', 'No email')}")
+                        return contacts
+                    else:
+                        print(f"📭 No contacts found with {approach['name']}")
+                else:
+                    print(f"❌ {approach['name']} failed: {resp.text}")
+                    
+            except Exception as e:
+                print(f"❌ {approach['name']} error: {e}")
+                self.log_api_call(approach['url'], "GET", 0, approach['params'], None, str(e))
+        
+        return []
     
     def add_contact(self, contact_data, location_id):
-        """Simple contact addition - just store the data"""
+        """Add contact with debug logging"""
         contact_id = contact_data.get('id')
         if not contact_id:
-            print("❌ No contact ID found")
+            print("❌ No contact ID found in data")
             return False
+        
+        print(f"💾 Adding contact: {contact_data.get('firstName', '')} {contact_data.get('lastName', '')} ({contact_id})")
         
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Get location name
         cursor.execute('SELECT location_name FROM locations WHERE location_id = ?', (location_id,))
         loc_result = cursor.fetchone()
         location_name = loc_result[0] if loc_result else 'Unknown Location'
         
-        # Insert or update contact
         cursor.execute('''
             INSERT OR REPLACE INTO contacts 
             (contact_id, location_id, location_name, first_name, last_name, 
@@ -136,15 +287,14 @@ class SimpleLeadAnalytics:
         conn.commit()
         conn.close()
         
-        print(f"✅ CONTACT ADDED: {contact_data.get('firstName', '')} {contact_data.get('lastName', '')} - {location_name}")
+        print(f"✅ Contact saved to database")
         return True
     
     def get_basic_stats(self, location_id=None):
-        """Get basic stats that should definitely work"""
+        """Get basic stats with debug info"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Base query
         where_clause = "WHERE 1=1"
         params = []
         
@@ -152,31 +302,32 @@ class SimpleLeadAnalytics:
             where_clause += " AND location_id = ?"
             params.append(location_id)
         
-        # Total contacts
         cursor.execute(f"SELECT COUNT(*) FROM contacts {where_clause}", params)
         total_contacts = cursor.fetchone()[0]
         
-        # Contacts with phone
         cursor.execute(f"SELECT COUNT(*) FROM contacts {where_clause} AND phone IS NOT NULL AND phone != ''", params)
         contacts_with_phone = cursor.fetchone()[0]
         
-        # Contacts with email
         cursor.execute(f"SELECT COUNT(*) FROM contacts {where_clause} AND email IS NOT NULL AND email != ''", params)
         contacts_with_email = cursor.fetchone()[0]
         
-        # Contacts with both phone AND email
         cursor.execute(f"SELECT COUNT(*) FROM contacts {where_clause} AND phone IS NOT NULL AND phone != '' AND email IS NOT NULL AND email != ''", params)
         contacts_with_both = cursor.fetchone()[0]
         
-        # New contacts today
         cursor.execute(f"SELECT COUNT(*) FROM contacts {where_clause} AND date(created_at) = date('now')", params)
         new_today = cursor.fetchone()[0]
         
-        # New contacts this week
         cursor.execute(f"SELECT COUNT(*) FROM contacts {where_clause} AND created_at >= date('now', '-7 days')", params)
         new_this_week = cursor.fetchone()[0]
         
+        # Debug: Show sample contacts
+        cursor.execute(f"SELECT first_name, last_name, email, phone, location_name FROM contacts {where_clause} LIMIT 5", params)
+        sample_contacts = cursor.fetchall()
+        
         conn.close()
+        
+        print(f"📊 STATS DEBUG - Total: {total_contacts}, Location filter: {location_id}")
+        print(f"📋 Sample contacts: {sample_contacts}")
         
         return {
             'total_contacts': total_contacts,
@@ -187,159 +338,11 @@ class SimpleLeadAnalytics:
             'new_this_week': new_this_week,
             'phone_rate': round(contacts_with_phone * 100.0 / max(total_contacts, 1), 1),
             'email_rate': round(contacts_with_email * 100.0 / max(total_contacts, 1), 1),
-            'complete_rate': round(contacts_with_both * 100.0 / max(total_contacts, 1), 1)
+            'complete_rate': round(contacts_with_both * 100.0 / max(total_contacts, 1), 1),
+            'sample_contacts': [f"{c[0]} {c[1]} - {c[2]} - {c[3]} ({c[4]})" for c in sample_contacts]
         }
     
-    def sync_locations(self, access_token, company_id=None):
-        """Enhanced location sync with pagination to get ALL sub-accounts"""
-        print("🔄 Syncing ALL locations with pagination...")
-        headers = {"Authorization": f"Bearer {access_token}", "Version": "2021-04-15"}
-        all_locations = []
-        
-        try:
-            if company_id:
-                url = "https://services.leadconnectorhq.com/oauth/installedLocations"
-                
-                skip = 0
-                limit = 100
-                
-                while True:
-                    params = {
-                        "companyId": company_id, 
-                        "appId": APP_ID, 
-                        "isInstalled": True,
-                        "skip": skip,
-                        "limit": limit
-                    }
-                    
-                    resp = requests.get(url, headers=headers, params=params)
-                    print(f"📡 Location API: {resp.status_code} - Skip: {skip}, Limit: {limit}")
-                    
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        locations = data.get('locations', []) if isinstance(data, dict) else data
-                        
-                        if not locations:
-                            print(f"📍 No more locations found at skip={skip}")
-                            break
-                            
-                        all_locations.extend(locations)
-                        print(f"📊 Found {len(locations)} locations. Total so far: {len(all_locations)}")
-                        
-                        # If we got less than the limit, we're done
-                        if len(locations) < limit:
-                            break
-                            
-                        skip += limit
-                        time.sleep(0.2)  # Rate limiting
-                    else:
-                        print(f"❌ API Error: {resp.status_code} - {resp.text}")
-                        break
-                
-                # Save all locations to database
-                if all_locations:
-                    conn = sqlite3.connect(self.db_path)
-                    cursor = conn.cursor()
-                    
-                    for loc in all_locations:
-                        location_id = loc.get('_id') or loc.get('id') or loc.get('locationId')
-                        location_name = loc.get('name', 'Unknown Location')
-                        
-                        cursor.execute('''
-                            INSERT OR REPLACE INTO locations 
-                            (location_id, location_name, company_id, last_synced)
-                            VALUES (?, ?, ?, ?)
-                        ''', (location_id, location_name, company_id, datetime.now()))
-                        
-                        print(f"💾 Saved location: {location_name} ({location_id})")
-                    
-                    conn.commit()
-                    conn.close()
-                    
-                    print(f"✅ Successfully synced {len(all_locations)} total locations!")
-                    return len(all_locations)
-            
-            return 0
-        except Exception as e:
-            print(f"❌ Location sync error: {e}")
-            return 0
-    
-    def fetch_all_contacts_from_ghl(self, access_token, location_id):
-        """ENHANCED: Fetch ALL contacts from GHL with better pagination and error handling"""
-        print(f"📥 Fetching ALL contacts from GHL for location: {location_id}")
-        headers = {"Authorization": f"Bearer {access_token}", "Version": "2021-04-15"}
-        
-        try:
-            # Use the correct contacts endpoint
-            url = f"https://services.leadconnectorhq.com/contacts/"
-            
-            total_fetched = 0
-            start_after_id = None
-            
-            while True:
-                params = {
-                    "locationId": location_id,
-                    "limit": 100
-                }
-                
-                if start_after_id:
-                    params['startAfterId'] = start_after_id
-                
-                print(f"📡 Fetching contacts: {params}")
-                resp = requests.get(url, headers=headers, params=params)
-                print(f"📊 Contacts API Response: {resp.status_code}")
-                
-                if resp.status_code == 200:
-                    data = resp.json()
-                    contacts = data.get('contacts', [])
-                    
-                    print(f"📦 Received {len(contacts)} contacts in this batch")
-                    
-                    if not contacts:
-                        print("📭 No more contacts found")
-                        break
-                    
-                    # Add each contact to our database
-                    for contact in contacts:
-                        try:
-                            success = self.add_contact(contact, location_id)
-                            if success:
-                                total_fetched += 1
-                            # Get the last contact ID for pagination
-                            start_after_id = contact.get('id')
-                        except Exception as contact_error:
-                            print(f"❌ Error adding contact {contact.get('id', 'unknown')}: {contact_error}")
-                    
-                    print(f"📊 Total fetched so far: {total_fetched}")
-                    
-                    # Check if we should continue (if we got fewer than limit, we're done)
-                    if len(contacts) < 100:
-                        print("📄 Last page reached (fewer than 100 contacts)")
-                        break
-                    
-                    time.sleep(0.3)  # Rate limiting
-                    
-                elif resp.status_code == 429:
-                    print("⏳ Rate limited, waiting 2 seconds...")
-                    time.sleep(2)
-                    continue
-                    
-                else:
-                    print(f"❌ API Error: {resp.status_code}")
-                    print(f"Response: {resp.text}")
-                    break
-            
-            print(f"✅ TOTAL CONTACTS FETCHED: {total_fetched}")
-            return total_fetched
-            
-        except Exception as e:
-            print(f"❌ Error fetching contacts: {e}")
-            import traceback
-            traceback.print_exc()
-            return 0
-    
     def get_locations(self):
-        """Get all locations"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -349,23 +352,30 @@ class SimpleLeadAnalytics:
         
         return [{'id': loc[0], 'name': loc[1], 'last_synced': loc[2]} for loc in locations]
     
-    def log_webhook(self, event_type, contact_id, location_id, raw_data):
-        """Simple webhook logging"""
+    def get_debug_logs(self, limit=10):
+        """Get recent API debug logs"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         cursor.execute('''
-            INSERT INTO webhook_events (event_type, contact_id, location_id, raw_data)
-            VALUES (?, ?, ?, ?)
-        ''', (event_type, contact_id, location_id, json.dumps(raw_data)))
+            SELECT endpoint, method, status_code, error_message, timestamp 
+            FROM api_debug_log 
+            ORDER BY timestamp DESC 
+            LIMIT ?
+        ''', (limit,))
         
-        conn.commit()
+        logs = cursor.fetchall()
         conn.close()
+        
+        return [{
+            'endpoint': log[0], 'method': log[1], 'status_code': log[2],
+            'error_message': log[3], 'timestamp': log[4]
+        } for log in logs]
 
 # Global instance
-analytics = SimpleLeadAnalytics()
+analytics = DebugLeadAnalytics()
 
-# Token functions (same as before)
+# Token functions
 def get_valid_token():
     conn = sqlite3.connect(analytics.db_path)
     cursor = conn.cursor()
@@ -437,7 +447,7 @@ def home():
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Simple Lead Analytics</title>
+        <title>Debug Lead Analytics</title>
         <style>
             body {{ font-family: Arial; max-width: 800px; margin: 50px auto; padding: 20px; 
                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; text-align: center; }}
@@ -449,13 +459,86 @@ def home():
     </head>
     <body>
         <div class="card">
-            <h1>Simple Lead Analytics</h1>
-            <p>Basic contact tracking that actually works</p>
+            <h1>🔍 Debug Lead Analytics</h1>
+            <p>Let's figure out why contacts aren't showing</p>
             <a href="{install_url}" class="install-btn">Install on GoHighLevel</a>
             <br><br>
-            <a href="/dashboard">View Dashboard</a> | 
+            <a href="/dashboard">Debug Dashboard</a> | 
+            <a href="/debug">Debug Info</a> |
             <a href="/health">Health Check</a>
         </div>
+    </body>
+    </html>
+    '''
+
+@app.route('/debug')
+def debug_info():
+    """Show debug information"""
+    token_data = get_valid_token()
+    debug_logs = analytics.get_debug_logs(20)
+    
+    return f'''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Debug Information</title>
+        <style>
+            body {{ font-family: monospace; margin: 20px; background: #1a1a1a; color: #00ff00; }}
+            .section {{ background: #2a2a2a; padding: 20px; margin: 10px 0; border-radius: 5px; }}
+            .error {{ color: #ff6b6b; }}
+            .success {{ color: #51cf66; }}
+            .info {{ color: #74c0fc; }}
+        </style>
+    </head>
+    <body>
+        <h1>🔍 DEBUG INFORMATION</h1>
+        
+        <div class="section">
+            <h2>🔑 TOKEN STATUS</h2>
+            <p>Token Available: <span class="{'success' if token_data else 'error'}">{'YES' if token_data else 'NO'}</span></p>
+            {f'<p>Company ID: {token_data.get("company_id", "Unknown")}</p>' if token_data else ''}
+        </div>
+        
+        <div class="section">
+            <h2>📊 RECENT API CALLS</h2>
+            {''.join([f'<p class="{'success' if log['status_code'] == 200 else 'error'}">{log["timestamp"]}: {log["method"]} {log["endpoint"]} - Status: {log["status_code"]}{" - Error: " + log["error_message"] if log["error_message"] else ""}</p>' for log in debug_logs])}
+        </div>
+        
+        <div class="section">
+            <h2>🛠️ DEBUG ACTIONS</h2>
+            <button onclick="testConnection()">Test API Connection</button>
+            <button onclick="debugLocations()">Debug Locations API</button>
+            <button onclick="debugContacts()">Debug Contacts API</button>
+        </div>
+        
+        <div id="results"></div>
+        
+        <script>
+            async function testConnection() {{
+                const response = await fetch('/api/test-connection', {{ method: 'POST' }});
+                const result = await response.json();
+                document.getElementById('results').innerHTML = '<div class="section"><h3>🔗 Connection Test</h3><pre>' + JSON.stringify(result, null, 2) + '</pre></div>';
+            }}
+            
+            async function debugLocations() {{
+                const response = await fetch('/api/debug-locations', {{ method: 'POST' }});
+                const result = await response.json();
+                document.getElementById('results').innerHTML = '<div class="section"><h3>📍 Locations Debug</h3><pre>' + JSON.stringify(result, null, 2) + '</pre></div>';
+            }}
+            
+            async function debugContacts() {{
+                const locationId = prompt('Enter Location ID to test:');
+                if (locationId) {{
+                    const response = await fetch('/api/debug-contacts', {{ 
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ location_id: locationId }})
+                    }});
+                    const result = await response.json();
+                    document.getElementById('results').innerHTML = '<div class="section"><h3>👥 Contacts Debug</h3><pre>' + JSON.stringify(result, null, 2) + '</pre></div>';
+                }}
+            }}
+        </script>
     </body>
     </html>
     '''
@@ -466,7 +549,7 @@ def dashboard():
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Simple Lead Dashboard</title>
+    <title>Debug Dashboard</title>
     <style>
         body { font-family: Arial; margin: 0; padding: 20px; background: #f5f5f5; }
         .container { max-width: 1200px; margin: 0 auto; }
@@ -483,13 +566,14 @@ def dashboard():
         .status { padding: 10px; margin: 10px 0; border-radius: 5px; }
         .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
         .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .debug-section { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; padding: 15px; margin: 10px 0; border-radius: 5px; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>📊 Simple Lead Analytics</h1>
-            <p>Let's get the basic data showing first!</p>
+            <h1>🔍 Debug Dashboard</h1>
+            <p>Let's see exactly what's happening with the API calls</p>
         </div>
 
         <div class="controls">
@@ -499,13 +583,17 @@ def dashboard():
             </select>
             
             <button onclick="loadDashboard()">🔄 Refresh Data</button>
-            <button onclick="syncLocations()">📍 Sync Locations</button>
-            <button onclick="fetchSelectedContacts()">📥 Fetch Contacts (Selected)</button>
-            <button onclick="fetchAllContacts()">📥 Fetch ALL Locations</button>
-            <button onclick="createTestContact()">🧪 Create Test Contact</button>
+            <button onclick="testApiConnection()">🔗 Test API</button>
+            <button onclick="debugLocationsCall()">📍 Debug Locations</button>
+            <button onclick="debugContactsCall()">👥 Debug Contacts</button>
         </div>
 
         <div id="status"></div>
+        
+        <div class="debug-section">
+            <h3>🛠️ Debug Information</h3>
+            <div id="debugInfo">Click debug buttons to see detailed API responses...</div>
+        </div>
 
         <div class="metrics" id="metricsGrid">
             <div class="metric">
@@ -526,7 +614,11 @@ def dashboard():
         function showStatus(message, type = 'success') {
             const statusDiv = document.getElementById('status');
             statusDiv.innerHTML = '<div class="' + type + '">' + message + '</div>';
-            setTimeout(() => statusDiv.innerHTML = '', 5000);
+            setTimeout(() => statusDiv.innerHTML = '', 10000);
+        }
+        
+        function showDebugInfo(info) {
+            document.getElementById('debugInfo').innerHTML = '<pre>' + JSON.stringify(info, null, 2) + '</pre>';
         }
 
         async function loadLocations() {
@@ -544,9 +636,7 @@ def dashboard():
                     select.appendChild(option);
                 });
                 
-                if (locations.length === 0) {
-                    showStatus('No locations found. Please sync locations first.', 'error');
-                }
+                showStatus('Loaded ' + locations.length + ' locations');
             } catch (error) {
                 showStatus('Error loading locations: ' + error.message, 'error');
             }
@@ -559,7 +649,7 @@ def dashboard():
                 currentData = await response.json();
                 
                 updateMetrics();
-                showStatus('Dashboard updated successfully!');
+                showStatus('Dashboard data loaded');
             } catch (error) {
                 showStatus('Error loading dashboard: ' + error.message, 'error');
             }
@@ -572,32 +662,22 @@ def dashboard():
                 { 
                     label: 'Total Contacts', 
                     value: currentData.total_contacts || 0,
-                    sub: 'All contacts in database'
+                    sub: 'Database count'
                 },
                 { 
-                    label: 'With Phone Number', 
+                    label: 'With Phone', 
                     value: currentData.contacts_with_phone || 0,
                     sub: (currentData.phone_rate || 0) + '% of total'
                 },
                 { 
-                    label: 'With Email Address', 
+                    label: 'With Email', 
                     value: currentData.contacts_with_email || 0,
                     sub: (currentData.email_rate || 0) + '% of total'
                 },
                 { 
                     label: 'Complete Contacts', 
                     value: currentData.contacts_with_both || 0,
-                    sub: 'Both phone & email (' + (currentData.complete_rate || 0) + '%)'
-                },
-                { 
-                    label: 'New Today', 
-                    value: currentData.new_today || 0,
-                    sub: 'Contacts added today'
-                },
-                { 
-                    label: 'New This Week', 
-                    value: currentData.new_this_week || 0,
-                    sub: 'Last 7 days'
+                    sub: 'Both phone & email'
                 }
             ];
 
@@ -612,84 +692,80 @@ def dashboard():
                     '<div class="metric-sub">' + metric.sub + '</div>';
                 metricsGrid.appendChild(card);
             });
-        }
-
-        async function syncLocations() {
-            try {
-                showStatus('Syncing locations...', 'success');
-                const response = await fetch('/api/sync-locations', { method: 'POST' });
-                const result = await response.json();
-                
-                if (result.status === 'success') {
-                    showStatus('Synced ' + result.count + ' locations successfully!');
-                    loadLocations();
-                } else {
-                    showStatus('Sync failed: ' + result.message, 'error');
-                }
-            } catch (error) {
-                showStatus('Sync error: ' + error.message, 'error');
+            
+            // Show sample contacts if available
+            if (currentData.sample_contacts && currentData.sample_contacts.length > 0) {
+                const sampleDiv = document.createElement('div');
+                sampleDiv.className = 'debug-section';
+                sampleDiv.innerHTML = '<h4>📋 Sample Contacts:</h4>' + 
+                    currentData.sample_contacts.map(c => '<p>' + c + '</p>').join('');
+                metricsGrid.appendChild(sampleDiv);
             }
         }
 
-        async function fetchSelectedContacts() {
+        async function testApiConnection() {
+            try {
+                showStatus('Testing API connection...', 'success');
+                const response = await fetch('/api/test-connection', { method: 'POST' });
+                const result = await response.json();
+                
+                showDebugInfo(result);
+                
+                if (result.status === 'success') {
+                    showStatus('✅ API connection successful!');
+                } else {
+                    showStatus('❌ API connection failed: ' + result.message, 'error');
+                }
+            } catch (error) {
+                showStatus('API test error: ' + error.message, 'error');
+            }
+        }
+
+        async function debugLocationsCall() {
+            try {
+                showStatus('Debugging locations API...', 'success');
+                const response = await fetch('/api/debug-locations', { method: 'POST' });
+                const result = await response.json();
+                
+                showDebugInfo(result);
+                
+                if (result.locations_found > 0) {
+                    showStatus('✅ Found ' + result.locations_found + ' locations');
+                    loadLocations(); // Refresh location dropdown
+                } else {
+                    showStatus('❌ No locations found - check debug info', 'error');
+                }
+            } catch (error) {
+                showStatus('Locations debug error: ' + error.message, 'error');
+            }
+        }
+
+        async function debugContactsCall() {
             try {
                 const locationId = document.getElementById('locationFilter').value;
-                
                 if (locationId === 'all') {
-                    showStatus('Use "Fetch ALL Locations" button for all locations, or select a specific location.', 'error');
+                    showStatus('Please select a specific location to debug contacts', 'error');
                     return;
                 }
                 
-                showStatus('Fetching contacts from selected location...', 'success');
-                const response = await fetch('/api/fetch-contacts', { 
+                showStatus('Debugging contacts API for selected location...', 'success');
+                const response = await fetch('/api/debug-contacts', { 
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ location_id: locationId })
                 });
                 const result = await response.json();
                 
-                if (result.status === 'success') {
-                    showStatus('Fetched ' + result.count + ' contacts from selected location!');
-                    setTimeout(() => loadDashboard(), 1000);
-                } else {
-                    showStatus('Fetch failed: ' + result.message, 'error');
-                }
-            } catch (error) {
-                showStatus('Fetch error: ' + error.message, 'error');
-            }
-        }
-
-        async function fetchAllContacts() {
-            try {
-                showStatus('Fetching contacts from ALL locations... This may take a while.', 'success');
-                const response = await fetch('/api/fetch-all-locations-contacts', { method: 'POST' });
-                const result = await response.json();
+                showDebugInfo(result);
                 
-                if (result.status === 'success') {
-                    showStatus('SUCCESS: Fetched ' + result.total_contacts + ' contacts from ' + result.locations_processed + ' locations!');
-                    setTimeout(() => loadDashboard(), 2000);
+                if (result.contacts_found > 0) {
+                    showStatus('✅ Found ' + result.contacts_found + ' contacts');
+                    loadDashboard(); // Refresh dashboard
                 } else {
-                    showStatus('Fetch failed: ' + result.message, 'error');
+                    showStatus('❌ No contacts found - check debug info', 'error');
                 }
             } catch (error) {
-                showStatus('Fetch error: ' + error.message, 'error');
-            }
-        }
-
-        async function createTestContact() {
-            try {
-                showStatus('Creating test contact...', 'success');
-                const response = await fetch('/api/create-test-contact', { method: 'POST' });
-                const result = await response.json();
-                
-                if (result.status === 'success') {
-                    showStatus('Test contact created: ' + result.contact_id);
-                    setTimeout(() => loadDashboard(), 1000);
-                } else {
-                    showStatus('Test contact creation failed: ' + result.message, 'error');
-                }
-            } catch (error) {
-                showStatus('Test error: ' + error.message, 'error');
+                showStatus('Contacts debug error: ' + error.message, 'error');
             }
         }
     </script>
@@ -732,18 +808,19 @@ def oauth_callback():
         conn.commit()
         conn.close()
         
-        locations_synced = analytics.sync_locations(tokens['access_token'], tokens.get('companyId'))
-        
         return f'''
         <div style="text-align: center; padding: 50px; font-family: Arial;">
-            <h1>✅ Installation Successful!</h1>
-            <p>Locations Synced: {locations_synced}</p>
-            <p><strong>Next steps:</strong></p>
-            <p>1. Setup webhook URL: <code>{BASE_URL}/webhook</code></p>
-            <p>2. Subscribe to: ContactCreate, ContactUpdate</p>
+            <h1>✅ OAuth Installation Successful!</h1>
+            <p>Company ID: {tokens.get('companyId', 'Unknown')}</p>
+            <p>Location ID: {tokens.get('locationId', 'Not specified')}</p>
+            <p>Scopes: {tokens.get('scope', 'Unknown')}</p>
             <br>
             <a href="/dashboard" style="background: #28a745; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px;">
-                📊 Open Dashboard
+                🔍 Open Debug Dashboard
+            </a>
+            <br><br>
+            <a href="/debug" style="background: #6c757d; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px;">
+                🛠️ View Debug Info
             </a>
         </div>
         '''
@@ -763,18 +840,68 @@ def api_stats():
     stats = analytics.get_basic_stats(location_id)
     return jsonify(stats)
 
-@app.route('/api/sync-locations', methods=['POST'])
-def api_sync_locations():
+@app.route('/api/test-connection', methods=['POST'])
+def api_test_connection():
+    """Test basic API connectivity"""
     token_data = get_valid_token()
     if not token_data:
         return jsonify({'status': 'error', 'message': 'No valid token found'})
     
-    count = analytics.sync_locations(token_data['access_token'], token_data.get('company_id'))
-    return jsonify({'status': 'success', 'count': count})
+    user_data = analytics.test_api_connection(token_data['access_token'])
+    
+    if user_data:
+        return jsonify({
+            'status': 'success',
+            'message': 'API connection successful',
+            'user_data': user_data,
+            'token_company_id': token_data.get('company_id'),
+            'api_company_id': user_data.get('companyId')
+        })
+    else:
+        return jsonify({'status': 'error', 'message': 'API connection failed'})
 
-@app.route('/api/fetch-contacts', methods=['POST'])
-def api_fetch_contacts():
-    """Fetch ALL contacts from GHL - either one location or all locations"""
+@app.route('/api/debug-locations', methods=['POST'])
+def api_debug_locations():
+    """Debug locations API"""
+    token_data = get_valid_token()
+    if not token_data:
+        return jsonify({'status': 'error', 'message': 'No valid token found'})
+    
+    company_id = token_data.get('company_id')
+    if not company_id:
+        return jsonify({'status': 'error', 'message': 'No company ID found in token'})
+    
+    locations = analytics.debug_locations_api(token_data['access_token'], company_id)
+    
+    # Save found locations to database
+    if locations:
+        conn = sqlite3.connect(analytics.db_path)
+        cursor = conn.cursor()
+        
+        for loc in locations:
+            location_id = loc.get('_id') or loc.get('id') or loc.get('locationId')
+            location_name = loc.get('name', 'Unknown Location')
+            
+            cursor.execute('''
+                INSERT OR REPLACE INTO locations 
+                (location_id, location_name, company_id, last_synced)
+                VALUES (?, ?, ?, ?)
+            ''', (location_id, location_name, company_id, datetime.now()))
+        
+        conn.commit()
+        conn.close()
+    
+    return jsonify({
+        'status': 'success',
+        'locations_found': len(locations),
+        'company_id': company_id,
+        'sample_locations': locations[:3] if locations else [],
+        'message': f'Found {len(locations)} locations'
+    })
+
+@app.route('/api/debug-contacts', methods=['POST'])
+def api_debug_contacts():
+    """Debug contacts API for a specific location"""
     token_data = get_valid_token()
     if not token_data:
         return jsonify({'status': 'error', 'message': 'No valid token found'})
@@ -782,138 +909,39 @@ def api_fetch_contacts():
     data = request.json
     location_id = data.get('location_id')
     
-    if location_id == 'all':
-        # Fetch from ALL locations
-        locations = analytics.get_locations()
-        total_count = 0
-        
-        for location in locations:
-            print(f"🔄 Fetching contacts for location: {location['name']}")
-            count = analytics.fetch_all_contacts_from_ghl(token_data['access_token'], location['id'])
-            total_count += count
-            time.sleep(0.5)  # Rate limiting between locations
-        
-        return jsonify({
-            'status': 'success', 
-            'count': total_count,
-            'locations_processed': len(locations),
-            'message': f'Fetched {total_count} contacts from {len(locations)} locations'
-        })
-    
-    elif location_id:
-        # Fetch from specific location
-        count = analytics.fetch_all_contacts_from_ghl(token_data['access_token'], location_id)
-        return jsonify({
-            'status': 'success', 
-            'count': count,
-            'message': f'Fetched {count} contacts from selected location'
-        })
-    
-    else:
+    if not location_id:
         return jsonify({'status': 'error', 'message': 'Location ID required'})
-
-@app.route('/api/fetch-all-locations-contacts', methods=['POST'])
-def api_fetch_all_locations_contacts():
-    """NEW: Fetch contacts from ALL locations at once"""
-    token_data = get_valid_token()
-    if not token_data:
-        return jsonify({'status': 'error', 'message': 'No valid token found'})
     
-    locations = analytics.get_locations()
-    if not locations:
-        return jsonify({'status': 'error', 'message': 'No locations found. Please sync locations first.'})
+    contacts = analytics.debug_contacts_api(token_data['access_token'], location_id)
     
-    total_contacts = 0
-    results = []
-    
-    for location in locations:
-        try:
-            print(f"🔄 Processing location: {location['name']} ({location['id']})")
-            count = analytics.fetch_all_contacts_from_ghl(token_data['access_token'], location['id'])
-            total_contacts += count
-            
-            results.append({
-                'location_name': location['name'],
-                'location_id': location['id'],
-                'contacts_fetched': count
-            })
-            
-            # Rate limiting between locations
-            time.sleep(0.5)
-            
-        except Exception as e:
-            print(f"❌ Error processing location {location['name']}: {e}")
-            results.append({
-                'location_name': location['name'],
-                'location_id': location['id'],
-                'contacts_fetched': 0,
-                'error': str(e)
-            })
+    # Save found contacts to database
+    saved_count = 0
+    for contact in contacts:
+        if analytics.add_contact(contact, location_id):
+            saved_count += 1
     
     return jsonify({
         'status': 'success',
-        'total_contacts': total_contacts,
-        'locations_processed': len(locations),
-        'results': results,
-        'message': f'Fetched {total_contacts} total contacts from {len(locations)} locations'
+        'contacts_found': len(contacts),
+        'contacts_saved': saved_count,
+        'location_id': location_id,
+        'sample_contacts': [
+            {
+                'id': c.get('id'),
+                'name': f"{c.get('firstName', '')} {c.get('lastName', '')}".strip(),
+                'email': c.get('email', ''),
+                'phone': c.get('phone', '')
+            } for c in contacts[:3]
+        ] if contacts else [],
+        'message': f'Found {len(contacts)} contacts, saved {saved_count}'
     })
-
-@app.route('/api/create-test-contact', methods=['POST'])
-def api_create_test_contact():
-    """Create a test contact for testing"""
-    locations = analytics.get_locations()
-    if not locations:
-        return jsonify({'status': 'error', 'message': 'No locations available'})
-    
-    test_contact = {
-        'id': f'test_{int(time.time())}',
-        'firstName': 'Test',
-        'lastName': 'Contact',
-        'email': f'test{int(time.time())}@example.com',
-        'phone': '+1234567890',
-        'source': 'manual_test',
-        'dateAdded': datetime.now().isoformat(),
-        'customFields': [],
-        'tags': ['test']
-    }
-    
-    success = analytics.add_contact(test_contact, locations[0]['id'])
-    
-    if success:
-        return jsonify({'status': 'success', 'contact_id': test_contact['id']})
-    else:
-        return jsonify({'status': 'error', 'message': 'Failed to create test contact'})
-
-@app.route('/webhook', methods=['POST'])
-def webhook_handler():
-    try:
-        webhook_data = request.json
-        event_type = webhook_data.get('type')
-        contact_id = webhook_data.get('contactId') or webhook_data.get('contact', {}).get('id')
-        location_id = webhook_data.get('locationId')
-        
-        print(f"🔔 WEBHOOK: {event_type} | Contact: {contact_id} | Location: {location_id}")
-        
-        # Log all webhooks
-        analytics.log_webhook(event_type, contact_id, location_id, webhook_data)
-        
-        # Handle contact events
-        if event_type in ['ContactCreate', 'ContactUpdate']:
-            contact = webhook_data.get('contact', {})
-            if contact.get('id') and location_id:
-                success = analytics.add_contact(contact, location_id)
-                if success:
-                    print(f"✅ CONTACT PROCESSED: {contact.get('firstName', '')} {contact.get('lastName', '')}")
-        
-        return jsonify({'status': 'success', 'message': f'Webhook {event_type} processed'})
-        
-    except Exception as e:
-        print(f"❌ WEBHOOK ERROR: {str(e)}")
-        return jsonify({'error': str(e)}), 500
 
 @app.route('/health')
 def health_check():
     try:
+        token_data = get_valid_token()
+        debug_logs = analytics.get_debug_logs(5)
+        
         conn = sqlite3.connect(analytics.db_path)
         cursor = conn.cursor()
         
@@ -923,31 +951,25 @@ def health_check():
         cursor.execute('SELECT COUNT(*) FROM locations')
         total_locations = cursor.fetchone()[0]
         
-        cursor.execute('SELECT COUNT(*) FROM webhook_events WHERE date(received_at) = date("now")')
-        webhooks_today = cursor.fetchone()[0]
-        
         conn.close()
-        
-        token_data = get_valid_token()
-        token_status = 'valid' if token_data else 'missing'
         
         return jsonify({
             'status': 'healthy',
             'timestamp': datetime.now().isoformat(),
             'base_url': BASE_URL,
-            'webhook_url': f'{BASE_URL}/webhook',
-            'version': 'Simple v1.0 - GET DATA WORKING',
+            'version': 'Debug v1.0 - API TROUBLESHOOTING',
             'database_health': {
                 'total_contacts': total_contacts,
-                'total_locations': total_locations,
-                'webhooks_today': webhooks_today
+                'total_locations': total_locations
             },
-            'oauth_status': token_status,
-            'next_steps': [
-                'Install OAuth tokens',
-                'Sync locations',
-                'Fetch existing contacts', 
-                'Setup webhooks in GHL'
+            'oauth_status': 'valid' if token_data else 'missing',
+            'company_id': token_data.get('company_id') if token_data else None,
+            'recent_api_calls': debug_logs,
+            'debug_endpoints': [
+                f'{BASE_URL}/debug',
+                f'{BASE_URL}/api/test-connection',
+                f'{BASE_URL}/api/debug-locations',
+                f'{BASE_URL}/api/debug-contacts'
             ]
         })
     except Exception as e:
@@ -959,11 +981,11 @@ def health_check():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    print(f"🚀 Simple Lead Analytics starting on port {port}")
+    print(f"🔍 Debug Lead Analytics starting on port {port}")
     print(f"🌐 Base URL: {BASE_URL}")
-    print(f"📡 Webhook URL: {BASE_URL}/webhook")
     print(f"📊 Dashboard: {BASE_URL}/dashboard")
+    print(f"🛠️ Debug Info: {BASE_URL}/debug")
     print(f"❤️ Health: {BASE_URL}/health")
-    print("🎯 FOCUS: Get basic contact data showing first!")
+    print("🎯 MISSION: Find out why contacts aren't showing!")
     
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port, debug=True)
