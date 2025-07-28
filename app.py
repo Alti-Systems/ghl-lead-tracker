@@ -191,26 +191,57 @@ class SimpleLeadAnalytics:
         }
     
     def sync_locations(self, access_token, company_id=None):
-        """Simple location sync"""
-        print("🔄 Syncing locations...")
+        """Enhanced location sync with pagination to get ALL sub-accounts"""
+        print("🔄 Syncing ALL locations with pagination...")
         headers = {"Authorization": f"Bearer {access_token}", "Version": "2021-04-15"}
+        all_locations = []
         
         try:
             if company_id:
                 url = "https://services.leadconnectorhq.com/oauth/installedLocations"
-                params = {"companyId": company_id, "appId": APP_ID, "isInstalled": True}
                 
-                resp = requests.get(url, headers=headers, params=params)
-                print(f"📡 Location API: {resp.status_code}")
+                skip = 0
+                limit = 100
                 
-                if resp.status_code == 200:
-                    data = resp.json()
-                    locations = data.get('locations', []) if isinstance(data, dict) else data
+                while True:
+                    params = {
+                        "companyId": company_id, 
+                        "appId": APP_ID, 
+                        "isInstalled": True,
+                        "skip": skip,
+                        "limit": limit
+                    }
                     
+                    resp = requests.get(url, headers=headers, params=params)
+                    print(f"📡 Location API: {resp.status_code} - Skip: {skip}, Limit: {limit}")
+                    
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        locations = data.get('locations', []) if isinstance(data, dict) else data
+                        
+                        if not locations:
+                            print(f"📍 No more locations found at skip={skip}")
+                            break
+                            
+                        all_locations.extend(locations)
+                        print(f"📊 Found {len(locations)} locations. Total so far: {len(all_locations)}")
+                        
+                        # If we got less than the limit, we're done
+                        if len(locations) < limit:
+                            break
+                            
+                        skip += limit
+                        time.sleep(0.2)  # Rate limiting
+                    else:
+                        print(f"❌ API Error: {resp.status_code} - {resp.text}")
+                        break
+                
+                # Save all locations to database
+                if all_locations:
                     conn = sqlite3.connect(self.db_path)
                     cursor = conn.cursor()
                     
-                    for loc in locations:
+                    for loc in all_locations:
                         location_id = loc.get('_id') or loc.get('id') or loc.get('locationId')
                         location_name = loc.get('name', 'Unknown Location')
                         
@@ -219,12 +250,14 @@ class SimpleLeadAnalytics:
                             (location_id, location_name, company_id, last_synced)
                             VALUES (?, ?, ?, ?)
                         ''', (location_id, location_name, company_id, datetime.now()))
+                        
+                        print(f"💾 Saved location: {location_name} ({location_id})")
                     
                     conn.commit()
                     conn.close()
                     
-                    print(f"✅ Synced {len(locations)} locations")
-                    return len(locations)
+                    print(f"✅ Successfully synced {len(all_locations)} total locations!")
+                    return len(all_locations)
             
             return 0
         except Exception as e:
@@ -232,61 +265,77 @@ class SimpleLeadAnalytics:
             return 0
     
     def fetch_all_contacts_from_ghl(self, access_token, location_id):
-        """FETCH ALL CONTACTS from GHL for a location to populate our database"""
+        """ENHANCED: Fetch ALL contacts from GHL with better pagination and error handling"""
         print(f"📥 Fetching ALL contacts from GHL for location: {location_id}")
         headers = {"Authorization": f"Bearer {access_token}", "Version": "2021-04-15"}
         
         try:
+            # Use the correct contacts endpoint
             url = f"https://services.leadconnectorhq.com/contacts/"
-            params = {"locationId": location_id, "limit": 100}
             
             total_fetched = 0
+            start_after_id = None
             
             while True:
+                params = {
+                    "locationId": location_id,
+                    "limit": 100
+                }
+                
+                if start_after_id:
+                    params['startAfterId'] = start_after_id
+                
+                print(f"📡 Fetching contacts: {params}")
                 resp = requests.get(url, headers=headers, params=params)
-                print(f"📡 Contacts API: {resp.status_code}")
+                print(f"📊 Contacts API Response: {resp.status_code}")
                 
                 if resp.status_code == 200:
                     data = resp.json()
                     contacts = data.get('contacts', [])
                     
+                    print(f"📦 Received {len(contacts)} contacts in this batch")
+                    
                     if not contacts:
+                        print("📭 No more contacts found")
                         break
                     
                     # Add each contact to our database
                     for contact in contacts:
-                        self.add_contact(contact, location_id)
-                        total_fetched += 1
+                        try:
+                            success = self.add_contact(contact, location_id)
+                            if success:
+                                total_fetched += 1
+                            # Get the last contact ID for pagination
+                            start_after_id = contact.get('id')
+                        except Exception as contact_error:
+                            print(f"❌ Error adding contact {contact.get('id', 'unknown')}: {contact_error}")
                     
-                    print(f"📊 Fetched {len(contacts)} contacts. Total: {total_fetched}")
+                    print(f"📊 Total fetched so far: {total_fetched}")
                     
-                    # Check for next page
-                    meta = data.get('meta', {})
-                    next_page_url = meta.get('nextPageUrl')
-                    
-                    if next_page_url:
-                        # Extract the startAfterId from the next page URL
-                        import urllib.parse as urlparse
-                        parsed = urlparse.urlparse(next_page_url)
-                        query_params = urlparse.parse_qs(parsed.query)
-                        
-                        if 'startAfterId' in query_params:
-                            params['startAfterId'] = query_params['startAfterId'][0]
-                        else:
-                            break
-                    else:
+                    # Check if we should continue (if we got fewer than limit, we're done)
+                    if len(contacts) < 100:
+                        print("📄 Last page reached (fewer than 100 contacts)")
                         break
                     
-                    time.sleep(0.2)  # Rate limiting
+                    time.sleep(0.3)  # Rate limiting
+                    
+                elif resp.status_code == 429:
+                    print("⏳ Rate limited, waiting 2 seconds...")
+                    time.sleep(2)
+                    continue
+                    
                 else:
-                    print(f"❌ API Error: {resp.status_code} - {resp.text}")
+                    print(f"❌ API Error: {resp.status_code}")
+                    print(f"Response: {resp.text}")
                     break
             
-            print(f"✅ Total contacts fetched: {total_fetched}")
+            print(f"✅ TOTAL CONTACTS FETCHED: {total_fetched}")
             return total_fetched
             
         except Exception as e:
             print(f"❌ Error fetching contacts: {e}")
+            import traceback
+            traceback.print_exc()
             return 0
     
     def get_locations(self):
@@ -451,7 +500,8 @@ def dashboard():
             
             <button onclick="loadDashboard()">🔄 Refresh Data</button>
             <button onclick="syncLocations()">📍 Sync Locations</button>
-            <button onclick="fetchAllContacts()">📥 Fetch All Contacts</button>
+            <button onclick="fetchSelectedContacts()">📥 Fetch Contacts (Selected)</button>
+            <button onclick="fetchAllContacts()">📥 Fetch ALL Locations</button>
             <button onclick="createTestContact()">🧪 Create Test Contact</button>
         </div>
 
@@ -581,15 +631,16 @@ def dashboard():
             }
         }
 
-        async function fetchAllContacts() {
+        async function fetchSelectedContacts() {
             try {
                 const locationId = document.getElementById('locationFilter').value;
+                
                 if (locationId === 'all') {
-                    showStatus('Please select a specific location to fetch contacts.', 'error');
+                    showStatus('Use "Fetch ALL Locations" button for all locations, or select a specific location.', 'error');
                     return;
                 }
                 
-                showStatus('Fetching all contacts from GoHighLevel...', 'success');
+                showStatus('Fetching contacts from selected location...', 'success');
                 const response = await fetch('/api/fetch-contacts', { 
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -598,8 +649,25 @@ def dashboard():
                 const result = await response.json();
                 
                 if (result.status === 'success') {
-                    showStatus('Fetched ' + result.count + ' contacts successfully!');
+                    showStatus('Fetched ' + result.count + ' contacts from selected location!');
                     setTimeout(() => loadDashboard(), 1000);
+                } else {
+                    showStatus('Fetch failed: ' + result.message, 'error');
+                }
+            } catch (error) {
+                showStatus('Fetch error: ' + error.message, 'error');
+            }
+        }
+
+        async function fetchAllContacts() {
+            try {
+                showStatus('Fetching contacts from ALL locations... This may take a while.', 'success');
+                const response = await fetch('/api/fetch-all-locations-contacts', { method: 'POST' });
+                const result = await response.json();
+                
+                if (result.status === 'success') {
+                    showStatus('SUCCESS: Fetched ' + result.total_contacts + ' contacts from ' + result.locations_processed + ' locations!');
+                    setTimeout(() => loadDashboard(), 2000);
                 } else {
                     showStatus('Fetch failed: ' + result.message, 'error');
                 }
@@ -706,7 +774,7 @@ def api_sync_locations():
 
 @app.route('/api/fetch-contacts', methods=['POST'])
 def api_fetch_contacts():
-    """Fetch ALL contacts from GHL for a specific location"""
+    """Fetch ALL contacts from GHL - either one location or all locations"""
     token_data = get_valid_token()
     if not token_data:
         return jsonify({'status': 'error', 'message': 'No valid token found'})
@@ -714,11 +782,81 @@ def api_fetch_contacts():
     data = request.json
     location_id = data.get('location_id')
     
-    if not location_id:
-        return jsonify({'status': 'error', 'message': 'Location ID required'})
+    if location_id == 'all':
+        # Fetch from ALL locations
+        locations = analytics.get_locations()
+        total_count = 0
+        
+        for location in locations:
+            print(f"🔄 Fetching contacts for location: {location['name']}")
+            count = analytics.fetch_all_contacts_from_ghl(token_data['access_token'], location['id'])
+            total_count += count
+            time.sleep(0.5)  # Rate limiting between locations
+        
+        return jsonify({
+            'status': 'success', 
+            'count': total_count,
+            'locations_processed': len(locations),
+            'message': f'Fetched {total_count} contacts from {len(locations)} locations'
+        })
     
-    count = analytics.fetch_all_contacts_from_ghl(token_data['access_token'], location_id)
-    return jsonify({'status': 'success', 'count': count})
+    elif location_id:
+        # Fetch from specific location
+        count = analytics.fetch_all_contacts_from_ghl(token_data['access_token'], location_id)
+        return jsonify({
+            'status': 'success', 
+            'count': count,
+            'message': f'Fetched {count} contacts from selected location'
+        })
+    
+    else:
+        return jsonify({'status': 'error', 'message': 'Location ID required'})
+
+@app.route('/api/fetch-all-locations-contacts', methods=['POST'])
+def api_fetch_all_locations_contacts():
+    """NEW: Fetch contacts from ALL locations at once"""
+    token_data = get_valid_token()
+    if not token_data:
+        return jsonify({'status': 'error', 'message': 'No valid token found'})
+    
+    locations = analytics.get_locations()
+    if not locations:
+        return jsonify({'status': 'error', 'message': 'No locations found. Please sync locations first.'})
+    
+    total_contacts = 0
+    results = []
+    
+    for location in locations:
+        try:
+            print(f"🔄 Processing location: {location['name']} ({location['id']})")
+            count = analytics.fetch_all_contacts_from_ghl(token_data['access_token'], location['id'])
+            total_contacts += count
+            
+            results.append({
+                'location_name': location['name'],
+                'location_id': location['id'],
+                'contacts_fetched': count
+            })
+            
+            # Rate limiting between locations
+            time.sleep(0.5)
+            
+        except Exception as e:
+            print(f"❌ Error processing location {location['name']}: {e}")
+            results.append({
+                'location_name': location['name'],
+                'location_id': location['id'],
+                'contacts_fetched': 0,
+                'error': str(e)
+            })
+    
+    return jsonify({
+        'status': 'success',
+        'total_contacts': total_contacts,
+        'locations_processed': len(locations),
+        'results': results,
+        'message': f'Fetched {total_contacts} total contacts from {len(locations)} locations'
+    })
 
 @app.route('/api/create-test-contact', methods=['POST'])
 def api_create_test_contact():
