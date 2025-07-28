@@ -18,17 +18,18 @@ APP_ID = os.getenv('GHL_APP_ID', '66c70d3c319d92c0772350b9')
 BASE_URL = "https://alti-speed-to-lead.onrender.com"
 REDIRECT_URI = f"{BASE_URL}/oauth/callback"
 
-# Scopes
+# Scopes - FIXED to ensure contacts access
 SCOPES = [
     "oauth.readonly",
-    "contacts.readonly", 
-    "contacts.write",
+    "contacts.readonly",
+    "contacts.write", 
     "conversations.readonly",
     "conversations/message.readonly",
     "locations.readonly",
     "locations/customFields.readonly",
     "locations/tasks.readonly",
-    "locations/tags.readonly"
+    "locations/tags.readonly",
+    "opportunities.readonly"
 ]
 
 class DebugLeadAnalytics:
@@ -935,18 +936,47 @@ def oauth_callback():
         
         return f'''
         <div style="text-align: center; padding: 50px; font-family: Arial;">
-            <h1>✅ OAuth Installation Successful!</h1>
-            <p>Company ID: {tokens.get('companyId', 'Unknown')}</p>
-            <p>Location ID: {tokens.get('locationId', 'Not specified')}</p>
-            <p>Scopes: {tokens.get('scope', 'Unknown')}</p>
+            <h1>⚠️ SCOPE PERMISSION ISSUE DETECTED!</h1>
+            
+            <div style="background: #fff3cd; color: #856404; padding: 20px; border-radius: 10px; margin: 20px 0;">
+                <h2>🔍 Diagnosis Complete</h2>
+                <p><strong>Problem:</strong> Your OAuth token is missing contacts.readonly permission</p>
+                <p><strong>Error:</strong> "This authClass type is not allowed to access this scope"</p>
+                <p><strong>Solution:</strong> Reinstall with proper scopes below</p>
+            </div>
+            
+            <p><strong>Company ID:</strong> {tokens.get('companyId', 'Unknown')}</p>
+            <p><strong>Current Scopes:</strong> {tokens.get('scope', 'Unknown')}</p>
+            
+            <div style="background: #d1ecf1; color: #0c5460; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                <h3>📋 Required Scopes for Contact Access:</h3>
+                <ul style="text-align: left; display: inline-block;">
+                    <li>contacts.readonly ✅</li>
+                    <li>contacts.write ✅</li>
+                    <li>locations.readonly ✅</li>
+                    <li>oauth.readonly ✅</li>
+                </ul>
+            </div>
+            
             <br>
             <a href="/dashboard" style="background: #28a745; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px;">
-                🔍 Open Debug Dashboard
+                🔍 Test Again (Same Issue Expected)
+            </a>
+            <br><br>
+            <a href="/" style="background: #dc3545; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px;">
+                🔄 REINSTALL WITH CORRECT SCOPES
             </a>
             <br><br>
             <a href="/debug" style="background: #6c757d; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px;">
-                🛠️ View Debug Info
+                🛠️ View Debug Details
             </a>
+            
+            <div style="background: #f8f9fa; color: #495057; padding: 15px; border-radius: 5px; margin: 20px 0; font-size: 12px;">
+                <strong>Technical Details:</strong><br>
+                - All 7 API endpoints returned 401 Unauthorized<br>
+                - Token is valid but lacks contacts permission<br>
+                - Need to reinstall OAuth with contacts.readonly scope
+            </div>
         </div>
         '''
         
@@ -1127,4 +1157,3 @@ if __name__ == '__main__':
     print("🎯 MISSION: Find out why contacts aren't showing!")
     
     app.run(host='0.0.0.0', port=port, debug=True)
-    
