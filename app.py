@@ -1,4 +1,4 @@
-# app.py - Real-Time GHL Lead Analytics - COMPLETE FIXED VERSION
+# app.py - Simplified Lead Analytics - GET DATA SHOWING FIRST
 import os
 import json
 import time
@@ -31,8 +31,8 @@ SCOPES = [
     "locations/tags.readonly"
 ]
 
-class RealTimeLeadAnalytics:
-    def __init__(self, db_path="realtime_lead_analytics.db"):
+class SimpleLeadAnalytics:
+    def __init__(self, db_path="simple_analytics.db"):
         self.db_path = db_path
         self.init_database()
     
@@ -40,44 +40,29 @@ class RealTimeLeadAnalytics:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
+        # SIMPLE: Just track contacts and basic info
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS contact_journey (
+            CREATE TABLE IF NOT EXISTS contacts (
                 contact_id TEXT PRIMARY KEY,
                 location_id TEXT NOT NULL,
                 location_name TEXT,
-                contact_name TEXT,
-                contact_email TEXT,
-                contact_phone TEXT,
-                contact_source TEXT,
-                created_at DATETIME NOT NULL,
-                first_call_attempted_at DATETIME,
-                first_call_connected_at DATETIME,
-                first_session_booked_at DATETIME,
-                first_purchase_at DATETIME,
-                minutes_to_first_call INTEGER,
-                minutes_to_first_connection INTEGER,
-                minutes_to_first_session INTEGER,
-                minutes_to_purchase INTEGER,
-                total_calls_attempted INTEGER DEFAULT 0,
-                total_calls_connected INTEGER DEFAULT 0,
-                total_sessions_booked INTEGER DEFAULT 0,
-                current_status TEXT DEFAULT 'new_lead',
-                opportunity_stage TEXT,
-                tags TEXT,
+                first_name TEXT,
+                last_name TEXT,
+                email TEXT,
+                phone TEXT,
+                source TEXT,
+                date_added TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 custom_fields TEXT,
-                last_activity_at DATETIME,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                tags TEXT,
+                last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS ghl_locations (
+            CREATE TABLE IF NOT EXISTS locations (
                 location_id TEXT PRIMARY KEY,
                 location_name TEXT NOT NULL,
-                address TEXT,
-                phone TEXT,
-                email TEXT,
-                timezone TEXT,
                 company_id TEXT,
                 is_active BOOLEAN DEFAULT TRUE,
                 last_synced DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -93,8 +78,6 @@ class RealTimeLeadAnalytics:
                 expires_at DATETIME,
                 location_id TEXT,
                 company_id TEXT,
-                token_type TEXT DEFAULT 'Bearer',
-                scope TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -106,264 +89,234 @@ class RealTimeLeadAnalytics:
                 contact_id TEXT,
                 location_id TEXT,
                 raw_data TEXT,
-                processed BOOLEAN DEFAULT FALSE,
-                error_message TEXT,
                 received_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
         conn.commit()
         conn.close()
-        print("Database initialized successfully")
+        print("✅ Simple database initialized")
     
-    def sync_all_locations_paginated(self, access_token, company_id=None):
-        print("Syncing ALL GHL locations with pagination...")
+    def add_contact(self, contact_data, location_id):
+        """Simple contact addition - just store the data"""
+        contact_id = contact_data.get('id')
+        if not contact_id:
+            print("❌ No contact ID found")
+            return False
+        
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Get location name
+        cursor.execute('SELECT location_name FROM locations WHERE location_id = ?', (location_id,))
+        loc_result = cursor.fetchone()
+        location_name = loc_result[0] if loc_result else 'Unknown Location'
+        
+        # Insert or update contact
+        cursor.execute('''
+            INSERT OR REPLACE INTO contacts 
+            (contact_id, location_id, location_name, first_name, last_name, 
+             email, phone, source, date_added, custom_fields, tags, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            contact_id,
+            location_id,
+            location_name,
+            contact_data.get('firstName', ''),
+            contact_data.get('lastName', ''),
+            contact_data.get('email', ''),
+            contact_data.get('phone', ''),
+            contact_data.get('source', ''),
+            contact_data.get('dateAdded', ''),
+            json.dumps(contact_data.get('customFields', [])),
+            json.dumps(contact_data.get('tags', [])),
+            datetime.now()
+        ))
+        
+        conn.commit()
+        conn.close()
+        
+        print(f"✅ CONTACT ADDED: {contact_data.get('firstName', '')} {contact_data.get('lastName', '')} - {location_name}")
+        return True
+    
+    def get_basic_stats(self, location_id=None):
+        """Get basic stats that should definitely work"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Base query
+        where_clause = "WHERE 1=1"
+        params = []
+        
+        if location_id and location_id != 'all':
+            where_clause += " AND location_id = ?"
+            params.append(location_id)
+        
+        # Total contacts
+        cursor.execute(f"SELECT COUNT(*) FROM contacts {where_clause}", params)
+        total_contacts = cursor.fetchone()[0]
+        
+        # Contacts with phone
+        cursor.execute(f"SELECT COUNT(*) FROM contacts {where_clause} AND phone IS NOT NULL AND phone != ''", params)
+        contacts_with_phone = cursor.fetchone()[0]
+        
+        # Contacts with email
+        cursor.execute(f"SELECT COUNT(*) FROM contacts {where_clause} AND email IS NOT NULL AND email != ''", params)
+        contacts_with_email = cursor.fetchone()[0]
+        
+        # Contacts with both phone AND email
+        cursor.execute(f"SELECT COUNT(*) FROM contacts {where_clause} AND phone IS NOT NULL AND phone != '' AND email IS NOT NULL AND email != ''", params)
+        contacts_with_both = cursor.fetchone()[0]
+        
+        # New contacts today
+        cursor.execute(f"SELECT COUNT(*) FROM contacts {where_clause} AND date(created_at) = date('now')", params)
+        new_today = cursor.fetchone()[0]
+        
+        # New contacts this week
+        cursor.execute(f"SELECT COUNT(*) FROM contacts {where_clause} AND created_at >= date('now', '-7 days')", params)
+        new_this_week = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        return {
+            'total_contacts': total_contacts,
+            'contacts_with_phone': contacts_with_phone,
+            'contacts_with_email': contacts_with_email,
+            'contacts_with_both': contacts_with_both,
+            'new_today': new_today,
+            'new_this_week': new_this_week,
+            'phone_rate': round(contacts_with_phone * 100.0 / max(total_contacts, 1), 1),
+            'email_rate': round(contacts_with_email * 100.0 / max(total_contacts, 1), 1),
+            'complete_rate': round(contacts_with_both * 100.0 / max(total_contacts, 1), 1)
+        }
+    
+    def sync_locations(self, access_token, company_id=None):
+        """Simple location sync"""
+        print("🔄 Syncing locations...")
         headers = {"Authorization": f"Bearer {access_token}", "Version": "2021-04-15"}
-        all_locations = []
         
         try:
             if company_id:
                 url = "https://services.leadconnectorhq.com/oauth/installedLocations"
                 params = {"companyId": company_id, "appId": APP_ID, "isInstalled": True}
                 
-                skip = 0
-                limit = 100
+                resp = requests.get(url, headers=headers, params=params)
+                print(f"📡 Location API: {resp.status_code}")
                 
-                while True:
-                    params['skip'] = skip
-                    params['limit'] = limit
+                if resp.status_code == 200:
+                    data = resp.json()
+                    locations = data.get('locations', []) if isinstance(data, dict) else data
                     
-                    resp = requests.get(url, headers=headers, params=params)
-                    print(f"API Request: {resp.status_code} - Skip: {skip}")
+                    conn = sqlite3.connect(self.db_path)
+                    cursor = conn.cursor()
                     
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        locations = data.get('locations', []) if isinstance(data, dict) else data
+                    for loc in locations:
+                        location_id = loc.get('_id') or loc.get('id') or loc.get('locationId')
+                        location_name = loc.get('name', 'Unknown Location')
                         
-                        if not locations:
-                            break
-                            
-                        all_locations.extend(locations)
-                        print(f"Found {len(locations)} locations. Total: {len(all_locations)}")
-                        
-                        if len(locations) < limit:
-                            break
-                            
-                        skip += limit
-                        time.sleep(0.1)
-                    else:
-                        break
-            
-            if all_locations:
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-                
-                for loc in all_locations:
-                    location_id = loc.get('_id') or loc.get('id') or loc.get('locationId')
-                    location_name = loc.get('name', 'Unknown Location')
+                        cursor.execute('''
+                            INSERT OR REPLACE INTO locations 
+                            (location_id, location_name, company_id, last_synced)
+                            VALUES (?, ?, ?, ?)
+                        ''', (location_id, location_name, company_id, datetime.now()))
                     
-                    cursor.execute('''
-                        INSERT OR REPLACE INTO ghl_locations 
-                        (location_id, location_name, address, phone, email, timezone, company_id, last_synced)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        location_id, location_name, loc.get('address', ''),
-                        loc.get('phone', ''), loc.get('email', ''), loc.get('timezone', ''),
-                        company_id, datetime.now()
-                    ))
-                
-                conn.commit()
-                conn.close()
-                print(f"Successfully synced {len(all_locations)} locations!")
-                return len(all_locations)
+                    conn.commit()
+                    conn.close()
+                    
+                    print(f"✅ Synced {len(locations)} locations")
+                    return len(locations)
             
             return 0
         except Exception as e:
-            print(f"Error syncing locations: {e}")
+            print(f"❌ Location sync error: {e}")
             return 0
     
-    def record_contact_created(self, contact_data, location_id):
-        contact_id = contact_data.get('id')
-        if not contact_id:
-            return False
+    def fetch_all_contacts_from_ghl(self, access_token, location_id):
+        """FETCH ALL CONTACTS from GHL for a location to populate our database"""
+        print(f"📥 Fetching ALL contacts from GHL for location: {location_id}")
+        headers = {"Authorization": f"Bearer {access_token}", "Version": "2021-04-15"}
         
-        created_at_str = contact_data.get('dateAdded') or contact_data.get('createdAt')
-        if created_at_str:
-            try:
-                if 'T' in created_at_str:
-                    created_at = datetime.fromisoformat(created_at_str.replace('Z', '+00:00')).replace(tzinfo=None)
-                else:
-                    created_at = datetime.fromisoformat(created_at_str)
-            except:
-                created_at = datetime.now()
-        else:
-            created_at = datetime.now()
-        
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT location_name FROM ghl_locations WHERE location_id = ?', (location_id,))
-        location_result = cursor.fetchone()
-        location_name = location_result[0] if location_result else 'Unknown Location'
-        
-        cursor.execute('SELECT contact_id FROM contact_journey WHERE contact_id = ?', (contact_id,))
-        existing = cursor.fetchone()
-        
-        if not existing:
-            cursor.execute('''
-                INSERT INTO contact_journey 
-                (contact_id, location_id, location_name, contact_name, contact_email, 
-                 contact_phone, contact_source, created_at, current_status, tags, last_activity_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                contact_id, location_id, location_name,
-                f"{contact_data.get('firstName', '')} {contact_data.get('lastName', '')}".strip(),
-                contact_data.get('email', ''), contact_data.get('phone', ''),
-                contact_data.get('source', 'unknown'), created_at, 'new_lead',
-                json.dumps(contact_data.get('tags', [])), created_at
-            ))
+        try:
+            url = f"https://services.leadconnectorhq.com/contacts/"
+            params = {"locationId": location_id, "limit": 100}
             
-            conn.commit()
-            print(f"NEW LEAD: {contact_id} at {location_name}")
-        
-        conn.close()
-        return True
+            total_fetched = 0
+            
+            while True:
+                resp = requests.get(url, headers=headers, params=params)
+                print(f"📡 Contacts API: {resp.status_code}")
+                
+                if resp.status_code == 200:
+                    data = resp.json()
+                    contacts = data.get('contacts', [])
+                    
+                    if not contacts:
+                        break
+                    
+                    # Add each contact to our database
+                    for contact in contacts:
+                        self.add_contact(contact, location_id)
+                        total_fetched += 1
+                    
+                    print(f"📊 Fetched {len(contacts)} contacts. Total: {total_fetched}")
+                    
+                    # Check for next page
+                    meta = data.get('meta', {})
+                    next_page_url = meta.get('nextPageUrl')
+                    
+                    if next_page_url:
+                        # Extract the startAfterId from the next page URL
+                        import urllib.parse as urlparse
+                        parsed = urlparse.urlparse(next_page_url)
+                        query_params = urlparse.parse_qs(parsed.query)
+                        
+                        if 'startAfterId' in query_params:
+                            params['startAfterId'] = query_params['startAfterId'][0]
+                        else:
+                            break
+                    else:
+                        break
+                    
+                    time.sleep(0.2)  # Rate limiting
+                else:
+                    print(f"❌ API Error: {resp.status_code} - {resp.text}")
+                    break
+            
+            print(f"✅ Total contacts fetched: {total_fetched}")
+            return total_fetched
+            
+        except Exception as e:
+            print(f"❌ Error fetching contacts: {e}")
+            return 0
     
-    def get_real_locations(self):
+    def get_locations(self):
+        """Get all locations"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        cursor.execute('''
-            SELECT location_id, location_name, address, last_synced
-            FROM ghl_locations 
-            WHERE is_active = TRUE
-            ORDER BY location_name
-        ''')
-        
+        cursor.execute('SELECT location_id, location_name, last_synced FROM locations ORDER BY location_name')
         locations = cursor.fetchall()
         conn.close()
         
-        return [{
-            'id': loc[0], 
-            'name': loc[1],
-            'address': loc[2] if loc[2] else '',
-            'last_synced': loc[3]
-        } for loc in locations]
+        return [{'id': loc[0], 'name': loc[1], 'last_synced': loc[2]} for loc in locations]
     
-    def get_enhanced_stats(self, location_id=None, days=30):
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute('SELECT COUNT(*) FROM contact_journey')
-            total_count = cursor.fetchone()[0]
-            
-            if total_count == 0:
-                conn.close()
-                return {
-                    'stats': self.get_empty_stats(),
-                    'best_times': []
-                }
-            
-            where_clause = f"WHERE created_at >= date('now', '-{days} days')"
-            params = []
-            
-            if location_id and location_id != 'all':
-                where_clause += " AND location_id = ?"
-                params.append(location_id)
-            
-            query = f'''
-                SELECT 
-                    COUNT(*) as total_leads,
-                    COALESCE(AVG(minutes_to_first_call), 0) as avg_minutes_to_first_call,
-                    COALESCE(AVG(minutes_to_first_connection), 0) as avg_minutes_to_first_connection,
-                    COUNT(CASE WHEN first_call_attempted_at IS NOT NULL THEN 1 END) as leads_called,
-                    COUNT(CASE WHEN first_call_connected_at IS NOT NULL THEN 1 END) as leads_connected,
-                    COUNT(CASE WHEN current_status = 'new_lead' THEN 1 END) as new_leads,
-                    COUNT(CASE WHEN current_status = 'contacted' THEN 1 END) as contacted_leads,
-                    COUNT(CASE WHEN current_status = 'connected' THEN 1 END) as connected_leads
-                FROM contact_journey 
-                {where_clause}
-            '''
-            
-            cursor.execute(query, params)
-            result = cursor.fetchone()
-            
-            if result:
-                total_leads = result[0] or 0
-                leads_called = result[3] or 0
-                leads_connected = result[4] or 0
-                
-                connection_rate = round(leads_connected * 100.0 / max(leads_called, 1), 1) if leads_called > 0 else 0
-                
-                stats = {
-                    'total_leads': total_leads,
-                    'avg_minutes_to_first_call': round(result[1] or 0, 1),
-                    'avg_hours_to_first_call': round((result[1] or 0) / 60, 2),
-                    'avg_minutes_to_first_connection': round(result[2] or 0, 1),
-                    'avg_hours_to_first_connection': round((result[2] or 0) / 60, 2),
-                    'leads_called': leads_called,
-                    'leads_connected': leads_connected,
-                    'new_leads': result[5] or 0,
-                    'contacted_leads': result[6] or 0,
-                    'connected_leads': result[7] or 0,
-                    'connection_rate': connection_rate,
-                    'session_rate': 0,
-                    'conversion_rate': 0,
-                    'leads_to_session': 0,
-                    'leads_to_purchase': 0,
-                    'session_booked_leads': 0,
-                    'purchased_leads': 0,
-                    'calls_within_5min': 0,
-                    'calls_within_1hour': 0,
-                    'speed_to_call_rate': 0,
-                    'hourly_call_rate': 0
-                }
-            else:
-                stats = self.get_empty_stats()
-            
-            conn.close()
-            
-            return {
-                'stats': stats,
-                'best_times': []
-            }
-            
-        except Exception as e:
-            print(f"Error in get_enhanced_stats: {e}")
-            return {
-                'stats': self.get_empty_stats(),
-                'best_times': []
-            }
-    
-    def get_empty_stats(self):
-        return {
-            'total_leads': 0, 'avg_minutes_to_first_call': 0, 'avg_hours_to_first_call': 0,
-            'avg_minutes_to_first_connection': 0, 'avg_hours_to_first_connection': 0,
-            'leads_called': 0, 'leads_connected': 0, 'new_leads': 0, 'contacted_leads': 0, 
-            'connected_leads': 0, 'connection_rate': 0, 'session_rate': 0, 'conversion_rate': 0,
-            'leads_to_session': 0, 'leads_to_purchase': 0, 'session_booked_leads': 0, 
-            'purchased_leads': 0, 'calls_within_5min': 0, 'calls_within_1hour': 0,
-            'speed_to_call_rate': 0, 'hourly_call_rate': 0
-        }
-    
-    def log_webhook_event(self, event_type, contact_id, location_id, raw_data, error_message=None):
+    def log_webhook(self, event_type, contact_id, location_id, raw_data):
+        """Simple webhook logging"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         cursor.execute('''
-            INSERT INTO webhook_events 
-            (event_type, contact_id, location_id, raw_data, error_message, processed)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (event_type, contact_id, location_id, json.dumps(raw_data), error_message, True))
+            INSERT INTO webhook_events (event_type, contact_id, location_id, raw_data)
+            VALUES (?, ?, ?, ?)
+        ''', (event_type, contact_id, location_id, json.dumps(raw_data)))
         
         conn.commit()
         conn.close()
 
-# Global analytics instance
-analytics = RealTimeLeadAnalytics()
+# Global instance
+analytics = SimpleLeadAnalytics()
 
-# Token management
+# Token functions (same as before)
 def get_valid_token():
     conn = sqlite3.connect(analytics.db_path)
     cursor = conn.cursor()
@@ -435,7 +388,7 @@ def home():
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Real-Time GHL Lead Analytics</title>
+        <title>Simple Lead Analytics</title>
         <style>
             body {{ font-family: Arial; max-width: 800px; margin: 50px auto; padding: 20px; 
                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; text-align: center; }}
@@ -447,8 +400,8 @@ def home():
     </head>
     <body>
         <div class="card">
-            <h1>Real-Time GHL Lead Analytics</h1>
-            <p>Advanced lead performance tracking</p>
+            <h1>Simple Lead Analytics</h1>
+            <p>Basic contact tracking that actually works</p>
             <a href="{install_url}" class="install-btn">Install on GoHighLevel</a>
             <br><br>
             <a href="/dashboard">View Dashboard</a> | 
@@ -464,55 +417,67 @@ def dashboard():
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Lead Analytics Dashboard</title>
+    <title>Simple Lead Dashboard</title>
     <style>
         body { font-family: Arial; margin: 0; padding: 20px; background: #f5f5f5; }
         .container { max-width: 1200px; margin: 0 auto; }
         .header { background: white; padding: 30px; border-radius: 10px; margin-bottom: 20px; text-align: center; }
         .controls { background: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
-        .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; }
-        .metric { background: white; padding: 20px; border-radius: 10px; text-align: center; }
-        .metric-value { font-size: 2em; font-weight: bold; color: #667eea; }
-        .metric-label { color: #666; margin-top: 5px; }
-        button { background: #667eea; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; margin: 5px; }
-        select { padding: 10px; border: 1px solid #ddd; border-radius: 5px; }
+        .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; }
+        .metric { background: white; padding: 25px; border-radius: 10px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .metric-value { font-size: 2.5em; font-weight: bold; color: #667eea; margin-bottom: 10px; }
+        .metric-label { color: #666; font-weight: 500; }
+        .metric-sub { color: #999; font-size: 0.9em; margin-top: 5px; }
+        button { background: #667eea; color: white; border: none; padding: 12px 24px; border-radius: 5px; cursor: pointer; margin: 5px; font-weight: 500; }
+        button:hover { background: #5a6fd8; }
+        select { padding: 10px; border: 1px solid #ddd; border-radius: 5px; margin: 5px; }
+        .status { padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>Real-Time Lead Analytics Dashboard</h1>
-            <p>Complete conversion funnel tracking</p>
+            <h1>📊 Simple Lead Analytics</h1>
+            <p>Let's get the basic data showing first!</p>
         </div>
 
         <div class="controls">
             <label>Location:</label>
             <select id="locationFilter">
-                <option value="all">All Locations</option>
+                <option value="all">Loading locations...</option>
             </select>
             
-            <label>Time Period:</label>
-            <select id="dateRange">
-                <option value="7">Last 7 Days</option>
-                <option value="30" selected>Last 30 Days</option>
-                <option value="90">Last 90 Days</option>
-            </select>
-            
-            <button onclick="updateDashboard()">Update</button>
-            <button onclick="syncAllLocations()">Sync Locations</button>
-            <button onclick="createTestData()">Create Test Data</button>
+            <button onclick="loadDashboard()">🔄 Refresh Data</button>
+            <button onclick="syncLocations()">📍 Sync Locations</button>
+            <button onclick="fetchAllContacts()">📥 Fetch All Contacts</button>
+            <button onclick="createTestContact()">🧪 Create Test Contact</button>
         </div>
 
-        <div class="metrics" id="metricsGrid"></div>
+        <div id="status"></div>
+
+        <div class="metrics" id="metricsGrid">
+            <div class="metric">
+                <div class="metric-value">Loading...</div>
+                <div class="metric-label">Please wait</div>
+            </div>
+        </div>
     </div>
 
     <script>
-        let dashboardData = {};
+        let currentData = {};
 
         document.addEventListener('DOMContentLoaded', function() {
             loadLocations();
             loadDashboard();
         });
+
+        function showStatus(message, type = 'success') {
+            const statusDiv = document.getElementById('status');
+            statusDiv.innerHTML = '<div class="' + type + '">' + message + '</div>';
+            setTimeout(() => statusDiv.innerHTML = '', 5000);
+        }
 
         async function loadLocations() {
             try {
@@ -528,75 +493,135 @@ def dashboard():
                     option.textContent = location.name;
                     select.appendChild(option);
                 });
+                
+                if (locations.length === 0) {
+                    showStatus('No locations found. Please sync locations first.', 'error');
+                }
             } catch (error) {
-                console.error('Error loading locations:', error);
+                showStatus('Error loading locations: ' + error.message, 'error');
             }
         }
 
         async function loadDashboard() {
             try {
                 const locationId = document.getElementById('locationFilter').value;
-                const days = document.getElementById('dateRange').value;
-                
-                const params = new URLSearchParams({
-                    location: locationId,
-                    days: days
-                });
-                
-                const response = await fetch('/api/realtime-stats?' + params);
-                dashboardData = await response.json();
+                const response = await fetch('/api/stats?location=' + locationId);
+                currentData = await response.json();
                 
                 updateMetrics();
+                showStatus('Dashboard updated successfully!');
             } catch (error) {
-                console.error('Error loading dashboard:', error);
+                showStatus('Error loading dashboard: ' + error.message, 'error');
             }
         }
 
         function updateMetrics() {
             const metricsGrid = document.getElementById('metricsGrid');
-            metricsGrid.innerHTML = '';
-
+            
             const metrics = [
-                { label: 'Total Leads', value: dashboardData.total_leads || 0 },
-                { label: 'Called', value: dashboardData.leads_called || 0 },
-                { label: 'Connected', value: dashboardData.leads_connected || 0 },
-                { label: 'Connection Rate', value: (dashboardData.connection_rate || 0) + '%' },
-                { label: 'Avg Time to Call', value: (dashboardData.avg_minutes_to_first_call || 0) + 'm' },
-                { label: 'Avg Time to Connect', value: (dashboardData.avg_minutes_to_first_connection || 0) + 'm' }
+                { 
+                    label: 'Total Contacts', 
+                    value: currentData.total_contacts || 0,
+                    sub: 'All contacts in database'
+                },
+                { 
+                    label: 'With Phone Number', 
+                    value: currentData.contacts_with_phone || 0,
+                    sub: (currentData.phone_rate || 0) + '% of total'
+                },
+                { 
+                    label: 'With Email Address', 
+                    value: currentData.contacts_with_email || 0,
+                    sub: (currentData.email_rate || 0) + '% of total'
+                },
+                { 
+                    label: 'Complete Contacts', 
+                    value: currentData.contacts_with_both || 0,
+                    sub: 'Both phone & email (' + (currentData.complete_rate || 0) + '%)'
+                },
+                { 
+                    label: 'New Today', 
+                    value: currentData.new_today || 0,
+                    sub: 'Contacts added today'
+                },
+                { 
+                    label: 'New This Week', 
+                    value: currentData.new_this_week || 0,
+                    sub: 'Last 7 days'
+                }
             ];
 
+            metricsGrid.innerHTML = '';
+            
             metrics.forEach(function(metric) {
                 const card = document.createElement('div');
                 card.className = 'metric';
-                card.innerHTML = '<div class="metric-value">' + metric.value + '</div>' +
-                    '<div class="metric-label">' + metric.label + '</div>';
+                card.innerHTML = 
+                    '<div class="metric-value">' + metric.value + '</div>' +
+                    '<div class="metric-label">' + metric.label + '</div>' +
+                    '<div class="metric-sub">' + metric.sub + '</div>';
                 metricsGrid.appendChild(card);
             });
         }
 
-        function updateDashboard() {
-            loadDashboard();
-        }
-
-        async function syncAllLocations() {
+        async function syncLocations() {
             try {
-                const response = await fetch('/api/sync-all-locations', { method: 'POST' });
+                showStatus('Syncing locations...', 'success');
+                const response = await fetch('/api/sync-locations', { method: 'POST' });
                 const result = await response.json();
-                alert('Synced ' + result.count + ' locations!');
-                loadLocations();
+                
+                if (result.status === 'success') {
+                    showStatus('Synced ' + result.count + ' locations successfully!');
+                    loadLocations();
+                } else {
+                    showStatus('Sync failed: ' + result.message, 'error');
+                }
             } catch (error) {
-                alert('Sync failed');
+                showStatus('Sync error: ' + error.message, 'error');
             }
         }
 
-        async function createTestData() {
+        async function fetchAllContacts() {
             try {
-                const response = await fetch('/api/create-test-data', { method: 'POST' });
+                const locationId = document.getElementById('locationFilter').value;
+                if (locationId === 'all') {
+                    showStatus('Please select a specific location to fetch contacts.', 'error');
+                    return;
+                }
+                
+                showStatus('Fetching all contacts from GoHighLevel...', 'success');
+                const response = await fetch('/api/fetch-contacts', { 
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ location_id: locationId })
+                });
                 const result = await response.json();
-                alert('Created ' + result.test_contacts.length + ' test contacts!');
-                setTimeout(() => { loadDashboard(); }, 1000);
+                
+                if (result.status === 'success') {
+                    showStatus('Fetched ' + result.count + ' contacts successfully!');
+                    setTimeout(() => loadDashboard(), 1000);
+                } else {
+                    showStatus('Fetch failed: ' + result.message, 'error');
+                }
             } catch (error) {
-                alert('Test data creation failed');
+                showStatus('Fetch error: ' + error.message, 'error');
+            }
+        }
+
+        async function createTestContact() {
+            try {
+                showStatus('Creating test contact...', 'success');
+                const response = await fetch('/api/create-test-contact', { method: 'POST' });
+                const result = await response.json();
+                
+                if (result.status === 'success') {
+                    showStatus('Test contact created: ' + result.contact_id);
+                    setTimeout(() => loadDashboard(), 1000);
+                } else {
+                    showStatus('Test contact creation failed: ' + result.message, 'error');
+                }
+            } catch (error) {
+                showStatus('Test error: ' + error.message, 'error');
             }
         }
     </script>
@@ -632,23 +657,25 @@ def oauth_callback():
         cursor = conn.cursor()
         cursor.execute('''
             INSERT OR REPLACE INTO oauth_tokens 
-            (client_key, access_token, refresh_token, expires_at, location_id, company_id, scope)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (client_key, access_token, refresh_token, expires_at, location_id, company_id)
+            VALUES (?, ?, ?, ?, ?, ?)
         ''', (client_key, tokens['access_token'], tokens['refresh_token'],
-              expires_at, tokens.get('locationId'), tokens.get('companyId'), tokens.get('scope')))
+              expires_at, tokens.get('locationId'), tokens.get('companyId')))
         conn.commit()
         conn.close()
         
-        locations_synced = analytics.sync_all_locations_paginated(tokens['access_token'], tokens.get('companyId'))
+        locations_synced = analytics.sync_locations(tokens['access_token'], tokens.get('companyId'))
         
         return f'''
         <div style="text-align: center; padding: 50px; font-family: Arial;">
-            <h1>Installation Successful!</h1>
+            <h1>✅ Installation Successful!</h1>
             <p>Locations Synced: {locations_synced}</p>
-            <p><strong>Setup webhook URL:</strong> {BASE_URL}/webhook</p>
-            <p><strong>Subscribe to:</strong> ContactCreate, OutboundMessage, InboundMessage</p>
+            <p><strong>Next steps:</strong></p>
+            <p>1. Setup webhook URL: <code>{BASE_URL}/webhook</code></p>
+            <p>2. Subscribe to: ContactCreate, ContactUpdate</p>
+            <br>
             <a href="/dashboard" style="background: #28a745; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px;">
-                Open Dashboard
+                📊 Open Dashboard
             </a>
         </div>
         '''
@@ -659,67 +686,65 @@ def oauth_callback():
 # API Routes
 @app.route('/api/locations')
 def api_locations():
-    locations = analytics.get_real_locations()
+    locations = analytics.get_locations()
     return jsonify(locations)
 
-@app.route('/api/sync-all-locations', methods=['POST'])
-def api_sync_all_locations():
+@app.route('/api/stats')
+def api_stats():
+    location_id = request.args.get('location', 'all')
+    stats = analytics.get_basic_stats(location_id)
+    return jsonify(stats)
+
+@app.route('/api/sync-locations', methods=['POST'])
+def api_sync_locations():
     token_data = get_valid_token()
     if not token_data:
         return jsonify({'status': 'error', 'message': 'No valid token found'})
     
-    count = analytics.sync_all_locations_paginated(token_data['access_token'], token_data.get('company_id'))
+    count = analytics.sync_locations(token_data['access_token'], token_data.get('company_id'))
     return jsonify({'status': 'success', 'count': count})
 
-@app.route('/api/realtime-stats')
-def api_realtime_stats():
-    try:
-        location_id = request.args.get('location', 'all')
-        days = int(request.args.get('days', 30))
-        
-        data = analytics.get_enhanced_stats(location_id, days)
-        response = data['stats'].copy()
-        response['best_times'] = data['best_times']
-        
-        return jsonify(response)
-        
-    except Exception as e:
-        print(f"Error in realtime-stats: {str(e)}")
-        return jsonify(analytics.get_empty_stats())
+@app.route('/api/fetch-contacts', methods=['POST'])
+def api_fetch_contacts():
+    """Fetch ALL contacts from GHL for a specific location"""
+    token_data = get_valid_token()
+    if not token_data:
+        return jsonify({'status': 'error', 'message': 'No valid token found'})
+    
+    data = request.json
+    location_id = data.get('location_id')
+    
+    if not location_id:
+        return jsonify({'status': 'error', 'message': 'Location ID required'})
+    
+    count = analytics.fetch_all_contacts_from_ghl(token_data['access_token'], location_id)
+    return jsonify({'status': 'success', 'count': count})
 
-@app.route('/api/create-test-data', methods=['POST'])
-def api_create_test_data():
-    try:
-        locations = analytics.get_real_locations()
-        if not locations:
-            return jsonify({'status': 'error', 'message': 'No locations available'})
-        
-        location_id = locations[0]['id']
-        test_contacts = []
-        
-        for i in range(5):
-            test_contact = {
-                'id': f'test_contact_{int(time.time())}_{i}',
-                'firstName': f'Test{i}',
-                'lastName': 'Contact',
-                'email': f'test{i}@example.com',
-                'phone': f'+123456789{i}',
-                'source': 'test_data',
-                'dateAdded': (datetime.now() - timedelta(hours=i)).isoformat()
-            }
-            
-            success = analytics.record_contact_created(test_contact, location_id)
-            if success:
-                test_contacts.append(test_contact['id'])
-        
-        return jsonify({
-            'status': 'success',
-            'test_contacts': test_contacts,
-            'location_used': location_id
-        })
-        
-    except Exception as e:
-        return jsonify({'status': 'error', 'error': str(e)})
+@app.route('/api/create-test-contact', methods=['POST'])
+def api_create_test_contact():
+    """Create a test contact for testing"""
+    locations = analytics.get_locations()
+    if not locations:
+        return jsonify({'status': 'error', 'message': 'No locations available'})
+    
+    test_contact = {
+        'id': f'test_{int(time.time())}',
+        'firstName': 'Test',
+        'lastName': 'Contact',
+        'email': f'test{int(time.time())}@example.com',
+        'phone': '+1234567890',
+        'source': 'manual_test',
+        'dateAdded': datetime.now().isoformat(),
+        'customFields': [],
+        'tags': ['test']
+    }
+    
+    success = analytics.add_contact(test_contact, locations[0]['id'])
+    
+    if success:
+        return jsonify({'status': 'success', 'contact_id': test_contact['id']})
+    else:
+        return jsonify({'status': 'error', 'message': 'Failed to create test contact'})
 
 @app.route('/webhook', methods=['POST'])
 def webhook_handler():
@@ -729,21 +754,23 @@ def webhook_handler():
         contact_id = webhook_data.get('contactId') or webhook_data.get('contact', {}).get('id')
         location_id = webhook_data.get('locationId')
         
-        print(f"WEBHOOK: {event_type} | Contact: {contact_id} | Location: {location_id}")
+        print(f"🔔 WEBHOOK: {event_type} | Contact: {contact_id} | Location: {location_id}")
         
-        analytics.log_webhook_event(event_type, contact_id, location_id, webhook_data)
+        # Log all webhooks
+        analytics.log_webhook(event_type, contact_id, location_id, webhook_data)
         
-        if event_type == 'ContactCreate':
+        # Handle contact events
+        if event_type in ['ContactCreate', 'ContactUpdate']:
             contact = webhook_data.get('contact', {})
             if contact.get('id') and location_id:
-                success = analytics.record_contact_created(contact, location_id)
+                success = analytics.add_contact(contact, location_id)
                 if success:
-                    print(f"NEW LEAD TRACKED: {contact.get('id')}")
+                    print(f"✅ CONTACT PROCESSED: {contact.get('firstName', '')} {contact.get('lastName', '')}")
         
         return jsonify({'status': 'success', 'message': f'Webhook {event_type} processed'})
         
     except Exception as e:
-        print(f"WEBHOOK ERROR: {str(e)}")
+        print(f"❌ WEBHOOK ERROR: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/health')
@@ -752,14 +779,14 @@ def health_check():
         conn = sqlite3.connect(analytics.db_path)
         cursor = conn.cursor()
         
-        cursor.execute('SELECT COUNT(*) FROM contact_journey')
+        cursor.execute('SELECT COUNT(*) FROM contacts')
         total_contacts = cursor.fetchone()[0]
         
-        cursor.execute('SELECT COUNT(*) FROM ghl_locations WHERE is_active = TRUE')
+        cursor.execute('SELECT COUNT(*) FROM locations')
         total_locations = cursor.fetchone()[0]
         
-        cursor.execute('SELECT COUNT(*) FROM webhook_events WHERE received_at >= date("now", "-1 day")')
-        recent_webhooks = cursor.fetchone()[0]
+        cursor.execute('SELECT COUNT(*) FROM webhook_events WHERE date(received_at) = date("now")')
+        webhooks_today = cursor.fetchone()[0]
         
         conn.close()
         
@@ -771,14 +798,19 @@ def health_check():
             'timestamp': datetime.now().isoformat(),
             'base_url': BASE_URL,
             'webhook_url': f'{BASE_URL}/webhook',
-            'version': '3.0.0 - WORKING',
+            'version': 'Simple v1.0 - GET DATA WORKING',
             'database_health': {
                 'total_contacts': total_contacts,
                 'total_locations': total_locations,
-                'recent_webhooks_24h': recent_webhooks
+                'webhooks_today': webhooks_today
             },
             'oauth_status': token_status,
-            'scopes_configured': SCOPES
+            'next_steps': [
+                'Install OAuth tokens',
+                'Sync locations',
+                'Fetch existing contacts', 
+                'Setup webhooks in GHL'
+            ]
         })
     except Exception as e:
         return jsonify({
@@ -789,11 +821,11 @@ def health_check():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    print(f"Real-Time GHL Lead Analytics v3.0 - WORKING starting on port {port}")
-    print(f"Base URL: {BASE_URL}")
-    print(f"Webhook URL: {BASE_URL}/webhook")
-    print(f"Dashboard: {BASE_URL}/dashboard")
-    print(f"Health: {BASE_URL}/health")
-    print("READY: Clean deployment, All locations sync, Lead tracking")
+    print(f"🚀 Simple Lead Analytics starting on port {port}")
+    print(f"🌐 Base URL: {BASE_URL}")
+    print(f"📡 Webhook URL: {BASE_URL}/webhook")
+    print(f"📊 Dashboard: {BASE_URL}/dashboard")
+    print(f"❤️ Health: {BASE_URL}/health")
+    print("🎯 FOCUS: Get basic contact data showing first!")
     
     app.run(host='0.0.0.0', port=port, debug=False)
