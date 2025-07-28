@@ -118,31 +118,195 @@ class DebugLeadAnalytics:
         conn.commit()
         conn.close()
     
-    def test_api_connection(self, access_token):
-        """Test basic API connectivity"""
-        headers = {"Authorization": f"Bearer {access_token}", "Version": "2021-04-15"}
+    def get_location_token(self, agency_access_token, company_id, location_id):
+        """Exchange agency token for location-specific token"""
+        print(f"🔄 EXCHANGING AGENCY TOKEN FOR LOCATION TOKEN")
+        print(f"📍 Location: {location_id}")
+        print(f"🏢 Company: {company_id}")
         
-        print("🔍 TESTING API CONNECTION...")
-        
-        # Test 1: Get current user info
         try:
-            url = "https://services.leadconnectorhq.com/users/current"
-            resp = requests.get(url, headers=headers)
-            print(f"👤 User Info API: {resp.status_code}")
-            self.log_api_call(url, "GET", resp.status_code, None, resp.text[:500])
+            url = "https://services.leadconnectorhq.com/oauth/locationToken"
+            headers = {
+                "Version": "2021-07-28",
+                "Content-Type": "application/x-www-form-urlencoded"
+            }
+            
+            data = {
+                "companyId": company_id,
+                "locationId": location_id
+            }
+            
+            # Use the agency token to get location token
+            headers["Authorization"] = f"Bearer {agency_access_token}"
+            
+            print(f"📡 POST {url}")
+            print(f"📋 Data: {data}")
+            
+            resp = requests.post(url, headers=headers, data=data)
+            print(f"📊 Status: {resp.status_code}")
+            
+            self.log_api_call(url, "POST", resp.status_code, data, resp.text[:500])
             
             if resp.status_code == 200:
-                user_data = resp.json()
-                print(f"✅ User: {user_data.get('name', 'Unknown')} - Company: {user_data.get('companyId', 'Unknown')}")
-                return user_data
+                token_data = resp.json()
+                print(f"✅ SUCCESS: Got location token")
+                print(f"🔑 Token: {token_data.get('access_token', '')[:20]}...")
+                print(f"📝 Scopes: {token_data.get('scope', 'Unknown')}")
+                print(f"⏰ Expires in: {token_data.get('expires_in', 'Unknown')} seconds")
+                
+                return {
+                    "success": True,
+                    "access_token": token_data.get('access_token'),
+                    "token_type": token_data.get('token_type'),
+                    "expires_in": token_data.get('expires_in'),
+                    "scope": token_data.get('scope'),
+                    "location_id": token_data.get('locationId'),
+                    "plan_id": token_data.get('planId'),
+                    "user_id": token_data.get('userId')
+                }
             else:
-                print(f"❌ User API failed: {resp.text}")
-                return None
+                print(f"❌ Failed: {resp.text}")
+                return {
+                    "success": False,
+                    "error": resp.text,
+                    "status_code": resp.status_code
+                }
                 
         except Exception as e:
-            print(f"❌ User API error: {e}")
-            self.log_api_call(url, "GET", 0, None, None, str(e))
-            return None
+            print(f"💥 Exception: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    def test_with_location_token(self, agency_access_token, company_id, location_id):
+        """Get location token and test contacts API"""
+        print(f"🧪 TESTING CONTACTS API WITH LOCATION TOKEN")
+        
+        # Step 1: Get location token
+        location_token_result = self.get_location_token(agency_access_token, company_id, location_id)
+        
+        if not location_token_result.get("success"):
+            return {
+                "location_token_exchange": location_token_result,
+                "contacts_test": {"error": "Could not get location token"}
+            }
+        
+        location_access_token = location_token_result["access_token"]
+        
+        # Step 2: Test contacts API with location token
+        headers = {
+            "Authorization": f"Bearer {location_access_token}",
+            "Version": "2021-07-28"
+        }
+        
+        try:
+            url = "https://services.leadconnectorhq.com/contacts/"
+            params = {"locationId": location_id, "limit": 10}
+            
+            print(f"📡 Testing contacts API with location token")
+            resp = requests.get(url, headers=headers, params=params)
+            print(f"📊 Contacts API Status: {resp.status_code}")
+            
+            contacts_result = {
+                "status_code": resp.status_code,
+                "success": resp.status_code == 200
+            }
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                contacts = data.get('contacts', [])
+                contacts_result.update({
+                    "contacts_found": len(contacts),
+                    "sample_contact": contacts[0] if contacts else None,
+                    "response_keys": list(data.keys())
+                })
+                print(f"🎉 SUCCESS: Found {len(contacts)} contacts!")
+                
+                # Save contacts to database
+                for contact in contacts:
+                    self.add_contact(contact, location_id)
+                    
+            else:
+                contacts_result["error"] = resp.text
+                print(f"❌ Still failed: {resp.text}")
+            
+            return {
+                "location_token_exchange": location_token_result,
+                "contacts_test": contacts_result
+            }
+            
+        except Exception as e:
+            return {
+                "location_token_exchange": location_token_result,
+                "contacts_test": {"error": str(e)}
+            }
+    
+    def test_location_specific_auth(self, access_token, location_id):
+        """Test if we need location-specific authentication"""
+        print(f"🔍 TESTING LOCATION-SPECIFIC AUTH for {location_id}")
+        
+        # Try different approaches with the location
+        location_tests = [
+            {
+                "name": "Location in header",
+                "headers": {
+                    "Authorization": f"Bearer {access_token}",
+                    "Version": "2021-07-28",
+                    "locationId": location_id
+                },
+                "params": {"limit": 5}
+            },
+            {
+                "name": "Location in custom header",
+                "headers": {
+                    "Authorization": f"Bearer {access_token}",
+                    "Version": "2021-07-28",
+                    "X-Location-Id": location_id
+                },
+                "params": {"limit": 5}
+            },
+            {
+                "name": "Standard location param",
+                "headers": {
+                    "Authorization": f"Bearer {access_token}",
+                    "Version": "2021-07-28"
+                },
+                "params": {"locationId": location_id, "limit": 5}
+            }
+        ]
+        
+        results = []
+        
+        for test in location_tests:
+            try:
+                resp = requests.get(
+                    "https://services.leadconnectorhq.com/contacts/",
+                    headers=test['headers'],
+                    params=test['params']
+                )
+                
+                result = {
+                    "test_name": test['name'],
+                    "status_code": resp.status_code,
+                    "response_preview": resp.text[:200],
+                    "success": resp.status_code == 200
+                }
+                
+                if resp.status_code == 200:
+                    data = resp.json()
+                    result["contacts_found"] = len(data.get('contacts', []))
+                
+                results.append(result)
+                print(f"{test['name']}: {resp.status_code}")
+                
+            except Exception as e:
+                results.append({
+                    "test_name": test['name'],
+                    "error": str(e)
+                })
+        
+        return results
     
     def debug_locations_api(self, access_token, company_id):
         """Debug the locations API with multiple approaches"""
@@ -709,9 +873,9 @@ def dashboard():
             </select>
             
             <button onclick="loadDashboard()">🔄 Refresh Data</button>
-            <button onclick="testApiConnection()">🔗 Test API</button>
+            <button onclick="testLocationToken()">🔑 Test Location Token</button>
             <button onclick="debugLocationsCall()">📍 Debug Locations</button>
-            <button onclick="debugContactsCall()">👥 Debug Contacts</button>
+            <button onclick="debugContactsCall()">👥 Debug Contacts (Old Method)</button>
         </div>
 
         <div id="status"></div>
@@ -829,21 +993,36 @@ def dashboard():
             }
         }
 
-        async function testApiConnection() {
+        async function testLocationToken() {
             try {
-                showStatus('Testing API connection...', 'success');
-                const response = await fetch('/api/test-connection', { method: 'POST' });
+                const locationId = document.getElementById('locationFilter').value;
+                if (locationId === 'all') {
+                    showStatus('Please select a specific location to test location token', 'error');
+                    return;
+                }
+                
+                showStatus('🔑 Testing location token exchange...', 'success');
+                const response = await fetch('/api/test-location-token', { 
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ location_id: locationId })
+                });
                 const result = await response.json();
                 
                 showDebugInfo(result);
                 
-                if (result.status === 'success') {
-                    showStatus('✅ API connection successful!');
+                const diagnosis = result.diagnosis || {};
+                
+                if (diagnosis.token_exchange_worked && diagnosis.contacts_api_worked) {
+                    showStatus('🎉 SUCCESS! Location token works - Found ' + diagnosis.contacts_found + ' contacts!');
+                    loadDashboard(); // Refresh to show new data
+                } else if (diagnosis.token_exchange_worked) {
+                    showStatus('✅ Token exchange worked, but contacts API still failed', 'error');
                 } else {
-                    showStatus('❌ API connection failed: ' + result.message, 'error');
+                    showStatus('❌ Location token exchange failed', 'error');
                 }
             } catch (error) {
-                showStatus('API test error: ' + error.message, 'error');
+                showStatus('Location token test error: ' + error.message, 'error');
             }
         }
 
@@ -995,25 +1174,39 @@ def api_stats():
     stats = analytics.get_basic_stats(location_id)
     return jsonify(stats)
 
-@app.route('/api/test-connection', methods=['POST'])
-def api_test_connection():
-    """Test basic API connectivity"""
+@app.route('/api/test-location-token', methods=['POST'])
+def api_test_location_token():
+    """Test the location token exchange and contacts API"""
     token_data = get_valid_token()
     if not token_data:
         return jsonify({'status': 'error', 'message': 'No valid token found'})
     
-    user_data = analytics.test_api_connection(token_data['access_token'])
+    data = request.json or {}
+    location_id = data.get('location_id', 'BV8MI0tF6PLcMoYERYYU')  # Default test location
+    company_id = token_data.get('company_id')
     
-    if user_data:
-        return jsonify({
-            'status': 'success',
-            'message': 'API connection successful',
-            'user_data': user_data,
-            'token_company_id': token_data.get('company_id'),
-            'api_company_id': user_data.get('companyId')
-        })
-    else:
-        return jsonify({'status': 'error', 'message': 'API connection failed'})
+    if not company_id:
+        return jsonify({'status': 'error', 'message': 'No company ID found'})
+    
+    # Test the location token exchange
+    result = analytics.test_with_location_token(
+        token_data['access_token'],
+        company_id,
+        location_id
+    )
+    
+    return jsonify({
+        'status': 'success',
+        'message': 'Location token test completed',
+        'agency_token_company_id': company_id,
+        'test_location_id': location_id,
+        'results': result,
+        'diagnosis': {
+            'token_exchange_worked': result.get('location_token_exchange', {}).get('success', False),
+            'contacts_api_worked': result.get('contacts_test', {}).get('success', False),
+            'contacts_found': result.get('contacts_test', {}).get('contacts_found', 0)
+        }
+    })
 
 @app.route('/api/debug-locations', methods=['POST'])
 def api_debug_locations():
