@@ -18,7 +18,7 @@ APP_ID = os.getenv('GHL_APP_ID', '66c70d3c319d92c0772350b9')
 BASE_URL = "https://alti-speed-to-lead.onrender.com"
 REDIRECT_URI = f"{BASE_URL}/oauth/callback"
 
-# Scopes - FIXED to ensure contacts access
+# Scopes - FIXED to remove invalid scope
 SCOPES = [
     "oauth.readonly",
     "contacts.readonly",
@@ -28,8 +28,7 @@ SCOPES = [
     "locations.readonly",
     "locations/customFields.readonly",
     "locations/tasks.readonly",
-    "locations/tags.readonly",
-    "opportunities.readonly"
+    "locations/tags.readonly"
 ]
 
 class DebugLeadAnalytics:
