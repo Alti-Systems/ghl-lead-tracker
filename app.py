@@ -117,8 +117,72 @@ class DebugLeadAnalytics:
         conn.commit()
         conn.close()
     
+    def test_direct_contacts_with_current_token(self, access_token, location_id):
+        """Test contacts API directly with current token (might already be location token)"""
+        print(f"🧪 TESTING CONTACTS API WITH CURRENT TOKEN")
+        print(f"📍 Location: {location_id}")
+        
+        # Test different approaches with current token
+        test_approaches = [
+            {
+                "name": "Current Token v2021-07-28",
+                "headers": {"Authorization": f"Bearer {access_token}", "Version": "2021-07-28"},
+                "params": {"locationId": location_id, "limit": 10}
+            },
+            {
+                "name": "Current Token No Version",
+                "headers": {"Authorization": f"Bearer {access_token}"},
+                "params": {"locationId": location_id, "limit": 10}
+            },
+            {
+                "name": "Current Token Different Param",
+                "headers": {"Authorization": f"Bearer {access_token}", "Version": "2021-07-28"},
+                "params": {"location_id": location_id, "limit": 10}
+            },
+            {
+                "name": "Current Token No Location Filter",
+                "headers": {"Authorization": f"Bearer {access_token}", "Version": "2021-07-28"},
+                "params": {"limit": 10}  # Since token might be location-specific already
+            }
+        ]
+        
+        for approach in test_approaches:
+            try:
+                url = "https://services.leadconnectorhq.com/contacts/"
+                print(f"\n📡 Testing: {approach['name']}")
+                
+                resp = requests.get(url, headers=approach['headers'], params=approach['params'])
+                print(f"📊 Status: {resp.status_code}")
+                
+                if resp.status_code == 200:
+                    data = resp.json()
+                    contacts = data.get('contacts', [])
+                    print(f"🎉 SUCCESS: Found {len(contacts)} contacts!")
+                    
+                    if contacts:
+                        print(f"👤 First contact: {contacts[0].get('firstName', '')} {contacts[0].get('lastName', '')}")
+                        
+                        # Save contacts to database
+                        for contact in contacts:
+                            self.add_contact(contact, location_id)
+                        
+                        return {
+                            "success": True,
+                            "approach": approach['name'],
+                            "contacts_found": len(contacts),
+                            "sample_contact": contacts[0],
+                            "all_contacts": contacts
+                        }
+                else:
+                    print(f"❌ Failed: {resp.text[:200]}")
+                    
+            except Exception as e:
+                print(f"💥 Exception: {e}")
+        
+        return {"success": False, "message": "All approaches failed"}
+    
     def get_location_token(self, agency_access_token, company_id, location_id):
-        """Exchange agency token for location-specific token"""
+        """Exchange agency token for location-specific token - FIXED"""
         print(f"🔄 EXCHANGING AGENCY TOKEN FOR LOCATION TOKEN")
         print(f"📍 Location: {location_id}")
         print(f"🏢 Company: {company_id}")
@@ -126,6 +190,7 @@ class DebugLeadAnalytics:
         try:
             url = "https://services.leadconnectorhq.com/oauth/locationToken"
             headers = {
+                "Authorization": f"Bearer {agency_access_token}",
                 "Version": "2021-07-28",
                 "Content-Type": "application/x-www-form-urlencoded"
             }
@@ -135,9 +200,6 @@ class DebugLeadAnalytics:
                 "locationId": location_id
             }
             
-            # Use the agency token to get location token
-            headers["Authorization"] = f"Bearer {agency_access_token}"
-            
             print(f"📡 POST {url}")
             print(f"📋 Data: {data}")
             
@@ -146,23 +208,32 @@ class DebugLeadAnalytics:
             
             self.log_api_call(url, "POST", resp.status_code, data, resp.text[:500])
             
-            if resp.status_code == 200:
-                token_data = resp.json()
-                print(f"✅ SUCCESS: Got location token")
-                print(f"🔑 Token: {token_data.get('access_token', '')[:20]}...")
-                print(f"📝 Scopes: {token_data.get('scope', 'Unknown')}")
-                print(f"⏰ Expires in: {token_data.get('expires_in', 'Unknown')} seconds")
-                
-                return {
-                    "success": True,
-                    "access_token": token_data.get('access_token'),
-                    "token_type": token_data.get('token_type'),
-                    "expires_in": token_data.get('expires_in'),
-                    "scope": token_data.get('scope'),
-                    "location_id": token_data.get('locationId'),
-                    "plan_id": token_data.get('planId'),
-                    "user_id": token_data.get('userId')
-                }
+            # Handle both 200 and 201 as success
+            if resp.status_code in [200, 201]:
+                try:
+                    token_data = resp.json()
+                    print(f"✅ SUCCESS: Got location token")
+                    print(f"🔑 Token: {token_data.get('access_token', '')[:20]}...")
+                    print(f"📝 Scopes: {token_data.get('scope', 'Unknown')}")
+                    print(f"⏰ Expires in: {token_data.get('expires_in', 'Unknown')} seconds")
+                    
+                    return {
+                        "success": True,
+                        "access_token": token_data.get('access_token'),
+                        "token_type": token_data.get('token_type'),
+                        "expires_in": token_data.get('expires_in'),
+                        "scope": token_data.get('scope'),
+                        "location_id": token_data.get('locationId'),
+                        "plan_id": token_data.get('planId'),
+                        "user_id": token_data.get('userId')
+                    }
+                except json.JSONDecodeError:
+                    # Response might already be a token string
+                    return {
+                        "success": False,
+                        "error": f"Could not parse JSON response: {resp.text[:200]}",
+                        "raw_response": resp.text
+                    }
             else:
                 print(f"❌ Failed: {resp.text}")
                 return {
